@@ -1,0 +1,1 @@
+export const NAMES: string[] = ["Okafor", "Rivas", "Tanaka", "Bjork", "Mensah", "Costa", "Petrov", "Dumas", "Ferro", "Kwan", "Salin", "Voss", "Ade", "Rho", "Marek", "Ibe", "Crane", "Diallo", "Hahn", "Reyes"];

@@ -1,0 +1,20 @@
+{
+  "name": "basketball-sim",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "sim": "tsx scripts/sim.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.3",
+    "typescript": "^5",
+    "vite": "^6",
+    "vitest": "^3"
+  }
+}
