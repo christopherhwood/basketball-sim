@@ -5,7 +5,7 @@ export type ShotType = "rim" | "close" | "mid" | "three";
 
 export type Point = { x: number; y: number };
 
-export type Attributes = {
+export type BaseAttributes = {
   speed: number;
   handle: number;
   pass: number;
@@ -20,8 +20,44 @@ export type Attributes = {
   rebound: number;
   interiorD: number;
   block: number;
+};
+
+export type Attributes = BaseAttributes & {
   height: number;
   tendShoot: number;
+};
+
+export type Tendencies = {
+  shootThree: number;
+  shootMid: number;
+  driveRim: number;
+  pass: number;
+  postUp: number;
+  screen: number;
+  helpDefense: number;
+  gambleSteal: number;
+  crashGlass: number;
+  pushTransition: number;
+};
+
+export type PlayerData = {
+  name: string;
+  number: number;
+  position: Pos;
+  height: number;
+  attributes: BaseAttributes;
+  tendencies: Tendencies;
+};
+
+export type TeamData = {
+  id: string;
+  name: string;
+  abbrev: string;
+  players: PlayerData[];
+};
+
+export type FreeAgentData = {
+  players: PlayerData[];
 };
 
 export type Stats = {
@@ -65,6 +101,7 @@ export type Player = {
   stats: Stats;
   name: string;
   ob?: OffBallState;
+  tendencies?: Tendencies;
 };
 
 export type ShotMeta = {

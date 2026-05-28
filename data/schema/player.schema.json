@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bball.local/schema/player.schema.json",
+  "title": "Player",
+  "description": "A single basketball player authored as external JSON data. Ratings are integers 25..99. Tendencies describe how often a player does things (0..100) and are consumed by later PRs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "number", "position", "height", "attributes", "tendencies"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Player display name."
+    },
+    "number": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99,
+      "description": "Jersey number."
+    },
+    "position": {
+      "type": "string",
+      "enum": ["PG", "SG", "SF", "PF", "C"],
+      "description": "Primary position."
+    },
+    "height": {
+      "type": "number",
+      "minimum": 5.5,
+      "maximum": 7.6,
+      "description": "Height in feet."
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The 14 player ratings, each an integer 25..99.",
+      "required": [
+        "speed",
+        "handle",
+        "pass",
+        "three",
+        "mid",
+        "finishing",
+        "perimD",
+        "steal",
+        "iq",
+        "strength",
+        "vertical",
+        "rebound",
+        "interiorD",
+        "block"
+      ],
+      "properties": {
+        "speed": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "handle": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "pass": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "three": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "mid": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "finishing": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "perimD": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "steal": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "iq": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "strength": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "vertical": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "rebound": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "interiorD": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "block": { "type": "integer", "minimum": 25, "maximum": 99 }
+      }
+    },
+    "tendencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How often a player does things, each an integer 0..100.",
+      "required": [
+        "shootThree",
+        "shootMid",
+        "driveRim",
+        "pass",
+        "postUp",
+        "screen",
+        "helpDefense",
+        "gambleSteal",
+        "crashGlass",
+        "pushTransition"
+      ],
+      "properties": {
+        "shootThree": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "shootMid": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "driveRim": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "pass": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "postUp": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "screen": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "helpDefense": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "gambleSteal": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "crashGlass": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "pushTransition": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    }
+  }
+}

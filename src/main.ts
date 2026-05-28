@@ -4,6 +4,8 @@ import { tick } from "./sim/possession.js";
 import { render } from "./render/render.js";
 import { updateUI } from "./ui/ui.js";
 import { tactics } from "./tactics/tactics.js";
+import { loadLeagueFromGlob } from "./data/leagueBrowser.js";
+import { teamToEnginePlayers } from "./data/playerData.js";
 import type { Tactics } from "./types.js";
 
 /* ---------- 9) LOOP ----------
@@ -89,7 +91,14 @@ document.querySelectorAll<HTMLElement>(".opts").forEach((grp) => {
 });
 
 function newGameWrap(): void {
-  newGame(Date.now());
+  const { teams } = loadLeagueFromGlob();
+  if (teams.length >= 2) {
+    const home = teamToEnginePlayers(teams[0], "home");
+    const away = teamToEnginePlayers(teams[1], "away");
+    newGame(Date.now(), { home, away });
+  } else {
+    newGame(Date.now());
+  }
   G.homeAttack = "R";
   G.awayAttack = "L";
   G.attackHoop = "R";
