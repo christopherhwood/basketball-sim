@@ -25,9 +25,9 @@ The app uses ES modules and must be served (it will not run from `file://`); use
 ## Project layout
 
 ```
-index.html            app shell (markup only)
+index.html            React mount point (#root)
 src/
-  main.ts             entry: game loop + UI wiring
+  main.tsx            React entry (renders <App/>)
   types.ts            shared engine types
   styles.css
   core/
@@ -49,9 +49,14 @@ src/
     transition.ts     made-basket and live (steal/board) transitions
     possession.ts     possession setup, clocks, the tick() orchestrator
   render/
-    render.ts         Canvas 2D court + players (presentation only)
-  ui/
-    ui.ts             scoreboard / box score / feed DOM updates
+    render.ts         createRenderer(canvas) — Canvas 2D court + players (presentation only)
+  app/
+    engine.ts         game-loop controller (play/step/sim/reset/speed)
+    store.ts          tiny external store + notify() (re-renders React each frame)
+    useGame.ts        useSyncExternalStore hook
+    matchup.ts        pure buildRosters + current matchup/selection state
+  ui/                 React components (App, Court, Scoreboard, BoxScore,
+                      Controls, TacticsPanel, MatchupSelect, PlayByPlay)
   data/
     playerData.ts     pure validate (ajv) + JSON-to-engine-player mapping
     loadFromFs.ts     node roster loader (sim + tests)
@@ -66,9 +71,10 @@ tests/                Vitest spec + golden-vector suite
 ### Architecture principles
 
 - **The engine is pure and framework-agnostic.** Nothing under `src/core`, `src/sim`,
-  `src/data`, or `src/tactics` touches the DOM or canvas. Only `render.ts`, `ui.ts`, and
-  the loop in `main.ts` do. This keeps the presentation layer swappable (a React UI is
-  planned next; see `ROADMAP.md`).
+  `src/data`, or `src/tactics` touches the DOM, canvas, or React. The presentation layer
+  (`src/render`, `src/app`, `src/ui`) is the only part that does, which is what let the UI
+  move to React without touching the engine. The React components read live engine state
+  via a tiny store + `useSyncExternalStore`; the engine still just mutates `G` each tick.
 - **The engine is seed-deterministic.** All randomness routes through `src/core/rng.ts`
   (a portable mulberry32). `newGame(seed)` reproduces an identical game. There is no raw
   `Math.random()` in the engine.
