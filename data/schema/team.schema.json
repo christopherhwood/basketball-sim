@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bball.local/schema/team.schema.json",
+  "title": "Team",
+  "description": "A team roster authored as external JSON data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "abbrev", "players"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Stable kebab-case identifier."
+    },
+    "name": {
+      "type": "string",
+      "description": "Team display name."
+    },
+    "abbrev": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4,
+      "description": "Short team abbreviation (2..4 chars)."
+    },
+    "players": {
+      "type": "array",
+      "minItems": 5,
+      "items": { "$ref": "./player.schema.json" },
+      "description": "Team roster, at least 5 players."
+    }
+  }
+}

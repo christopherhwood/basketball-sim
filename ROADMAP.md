@@ -44,9 +44,12 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
 - **PR 1 — structure & engine (done).** Single file → TypeScript + Vite. Pure,
   seed-deterministic engine. Spec/golden test suite. Headless sim harness. Docs.
   Behavior-preserving.
-- **PR 2 — React shell + player data model.** Stand up React + Vite for the UI shell.
-  Define the Player JSON schema (identity + attributes + tendencies + optional traits),
-  a loader, a sample roster, and the documented LLM-generation flow.
+- **PR 2a — player data model (done).** Player JSON schema (identity + attributes +
+  tendencies), an ajv-validating loader (browser via `import.meta.glob`, node via `fs`),
+  sample rosters, the `generate-roster` Claude Code skill, and tests. Archetype generation
+  remains the fallback when `data/` is empty.
+- **PR 2b — React shell.** Stand up React + Vite for the UI shell, including a
+  roster/matchup selection UI over the loaded teams.
 - **PR 3 — per-player decisions.** Extract the Decision layer; drive shoot/drive/pass/cut/
   screen/help choices from per-player tendencies. Team tactics become defaults/biases.
 - **PR 4 — coaching system.** Per-player and per-matchup directives + a coaching resolver,

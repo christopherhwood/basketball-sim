@@ -7,15 +7,19 @@
  *   npm run sim                  # 100 games, base seed 1
  *   npm run sim -- --games 500   # more games for tighter averages
  *   npm run sim -- --seed 42     # different base seed
- *   npm run sim -- --quiet       # summary only (no per-quarter cadence note)
+ *   npm run sim -- --home harbor-city-wolves --away summit-valley-rampart  # fixed rosters by team id
  *
  * Games are seeded base+i, so a given (games, seed) pair is fully reproducible.
+ * When --home/--away are supplied the rosters come from fixed JSON data (not the
+ * archetype generator), so a seeded loaded game is fully deterministic.
  */
 
 import { newGame, G } from "../src/core/state.js";
 import { seedRng } from "../src/core/rng.js";
 import { tick } from "../src/sim/possession.js";
-import type { Player, Stats } from "../src/types.js";
+import { loadLeagueFromDir } from "../src/data/loadFromFs.js";
+import { teamToEnginePlayers } from "../src/data/playerData.js";
+import type { Player, Stats, TeamData } from "../src/types.js";
 
 const TICK_GUARD = 200_000; // ~20k game-seconds; a full 48-min game is ~28.8k ticks of clock
 
@@ -43,8 +47,8 @@ function addTeam(agg: Agg, team: Player[]): void {
 }
 
 /* Mirror of main.ts newGameWrap, then tick to the final buzzer. */
-function runGame(seed: number): void {
-  newGame(seed);
+function runGame(seed: number, rosters?: { home: Player[]; away: Player[] }): void {
+  newGame(seed, rosters);
   G.homeAttack = "R";
   G.awayAttack = "L";
   G.attackHoop = "R";
@@ -83,8 +87,29 @@ function main(): void {
     const i = args.indexOf(flag);
     return i >= 0 && args[i + 1] ? Number(args[i + 1]) : def;
   };
+  const str = (flag: string): string | undefined => {
+    const i = args.indexOf(flag);
+    return i >= 0 && args[i + 1] ? args[i + 1] : undefined;
+  };
   const games = num("--games", 100);
   const baseSeed = num("--seed", 1);
+  const homeId = str("--home");
+  const awayId = str("--away");
+
+  let homeTeam: TeamData | undefined;
+  let awayTeam: TeamData | undefined;
+  if (homeId && awayId) {
+    const { teams } = loadLeagueFromDir();
+    homeTeam = teams.find((t) => t.id === homeId);
+    awayTeam = teams.find((t) => t.id === awayId);
+    if (!homeTeam) throw new Error(`--home team not found: ${homeId}`);
+    if (!awayTeam) throw new Error(`--away team not found: ${awayId}`);
+  }
+  // Fresh engine players per game so stats/positions never carry over.
+  const makeRosters = (): { home: Player[]; away: Player[] } | undefined =>
+    homeTeam && awayTeam
+      ? { home: teamToEnginePlayers(homeTeam, "home"), away: teamToEnginePlayers(awayTeam, "away") }
+      : undefined;
 
   const home = blank();
   const away = blank();
@@ -93,7 +118,7 @@ function main(): void {
   for (let i = 0; i < games; i++) {
     const seed = baseSeed + i;
     seedRng(seed);
-    runGame(seed);
+    runGame(seed, makeRosters());
     home.games++; away.games++;
     addTeam(home, G.home);
     addTeam(away, G.away);
