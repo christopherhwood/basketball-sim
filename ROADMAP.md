@@ -48,8 +48,9 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
   tendencies), an ajv-validating loader (browser via `import.meta.glob`, node via `fs`),
   sample rosters, the `generate-roster` Claude Code skill, and tests. Archetype generation
   remains the fallback when `data/` is empty.
-- **PR 2b — React shell.** Stand up React + Vite for the UI shell, including a
-  roster/matchup selection UI over the loaded teams.
+- **PR 2b — React shell (done).** UI migrated to React + Vite (canvas court kept, engine
+  untouched), with a roster/matchup selection UI over the loaded teams. React reads engine
+  state via a small store + `useSyncExternalStore`.
 - **PR 3 — per-player decisions.** Extract the Decision layer; drive shoot/drive/pass/cut/
   screen/help choices from per-player tendencies. Team tactics become defaults/biases.
 - **PR 4 — coaching system.** Per-player and per-matchup directives + a coaching resolver,
