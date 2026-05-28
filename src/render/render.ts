@@ -43,17 +43,24 @@ function drawCourt(): void {
     cx.strokeStyle = "#3a5a58";
     cx.stroke();
     cx.strokeStyle = "#28403f";
-    // 3pt arc (approx) + corners
+    // 3pt line: straight corners (parallel to the sideline) joined by an arc of
+    // radius ARC_R centered on the hoop. The straight portions exist because a
+    // full-radius arc would run off the corner, so the arc only spans from where
+    // it meets each corner line (y = cornerY / COURT_W - cornerY) up to the top.
+    const cornerY = 3;
+    const sinC = (25 - cornerY) / ARC_R; // sin of the angle where the arc meets a corner
+    const thetaC = Math.asin(sinC);
+    const tangentX = h.x + dir * Math.cos(thetaC) * ARC_R; // arc/corner join, on both corners
+    const baselineX = dir === 1 ? 0 : COURT_L;
+    line({ x: baselineX, y: cornerY }, { x: tangentX, y: cornerY });
+    line({ x: baselineX, y: COURT_W - cornerY }, { x: tangentX, y: COURT_W - cornerY });
     cx.beginPath();
-    for (let a = -1; a <= 1; a += 0.02) {
-      const ang = a * 1.05 * Math.PI / 2;
-      const x = h.x + dir * Math.cos(ang) * ARC_R,
-        y = 25 + Math.sin(ang) * ARC_R;
-      if (y < 3.2 || y > 46.8) continue;
-      a === -1 ? cx.moveTo(px(x), py(y)) : cx.lineTo(px(x), py(y));
+    for (let t = -thetaC; t <= thetaC; t += 0.02) {
+      const x = h.x + dir * Math.cos(t) * ARC_R,
+        y = 25 + Math.sin(t) * ARC_R;
+      t === -thetaC ? cx.moveTo(px(x), py(y)) : cx.lineTo(px(x), py(y));
     }
     cx.stroke();
-    line({ x: h.x, y: 3.2 }, { x: h.x + dir * 0, y: 3.2 });
   });
   // highlight which end is being attacked
   const h = hoop();
