@@ -27,6 +27,43 @@ function heightTerm(p: Player): number {
   return clamp((p.attr.height - 6.5) * 6, -4, 6);
 }
 
+function hoopDepth(pt: Point, h: Point): number {
+  return Math.abs(pt.x - h.x);
+}
+
+function isPaintEntryTarget(pt: Point, h: Point): boolean {
+  return hoopDepth(pt, h) <= PASS_RISK_ENTRY_DEPTH && Math.abs(pt.y - h.y) <= PASS_RISK_ENTRY_WIDTH;
+}
+
+export function passRouteRisk(from: Point, to: Point, h: Point): number {
+  const d = dist(from, to);
+  const lateral = Math.abs(from.y - to.y);
+  const fromDepth = hoopDepth(from, h);
+  const longRisk = clamp((d - PASS_RISK_LONG_START) / PASS_RISK_LONG_RANGE, 0, 1) * 0.45;
+  const crossCourtRisk =
+    clamp((lateral - PASS_RISK_LATERAL_START) / PASS_RISK_LATERAL_RANGE, 0, 1) *
+    clamp((d - PASS_RISK_LONG_START) / PASS_RISK_LONG_RANGE, 0, 1) *
+    0.7;
+
+  let entryRisk = 0;
+  if (isPaintEntryTarget(to, h) && fromDepth > PASS_RISK_ENTRY_FROM_DEPTH) {
+    entryRisk =
+      0.25 +
+      clamp((lateral - PASS_RISK_ENTRY_WIDTH) / PASS_RISK_LATERAL_RANGE, 0, 1) * 0.6 +
+      clamp((d - 12) / 16, 0, 1) * 0.55;
+    if (from.y < PASS_RISK_CORNER_Y || from.y > 50 - PASS_RISK_CORNER_Y) entryRisk += 0.3;
+  }
+
+  return clamp(longRisk + crossCourtRisk + entryRisk, 0, 2);
+}
+
+export function passSelectionPenalty(from: Player, to: Point, h: Point): number {
+  const routeRisk = passRouteRisk(from, to, h);
+  const awareness = clamp((from.attr.iq - 45) / 35, 0.2, 1.15);
+  const skillComfort = clamp((from.attr.pass - 50) / 40, 0, 1);
+  return routeRisk * (0.55 + awareness * 0.85) * (1.05 - skillComfort * 0.25);
+}
+
 /* ---------- TURNOVER / STEAL / SHOT-SELECTION TUNING ----------
    Every magnitude below is a named knob so the tuning phase can adjust the
    stat it drives without hunting through the logic. Probabilities here apply
@@ -52,7 +89,9 @@ const BAD_PASS_PASS_SLOPE = 1 / 2400; // per point of (70 - passer pass): worse 
 const BAD_PASS_RECV_PRESSURE = 0.011; // extra chance when a defender is hard on the receiver
 const BAD_PASS_RECV_RADIUS = 4.5; // a defender within this of the receiver pressures the catch
 const BAD_PASS_CLAIM_RADIUS = 4.5; // a defender this close to the errant ball claims it (credit STL)
-const BAD_PASS_CAP = 0.03; // ceiling on bad-pass probability
+const BAD_PASS_ROUTE_BASE = 0.006; // route-risk chance on bad long/diagonal passes
+const BAD_PASS_ROUTE_PASS_SLOPE = 1 / 1400; // per point of (70 - passer pass), scaled by route risk
+const BAD_PASS_CAP = 0.075; // ceiling on bad-pass probability
 // Whether a recovered errant pass is credited as a STEAL is gated by the
 // recovering defender's gambleSteal: gamblers jump the ball (steal), passive
 // defenders merely corral the loose ball (turnover, no steal). This routes the
@@ -65,14 +104,26 @@ const BAD_PASS_STEAL_BASE = 0.72; // claim->steal chance at neutral gambleSteal
 const LANE_STEAL_BASE = 0.0125; // was 0.015
 const LANE_STEAL_STEAL_SLOPE = 1 / 1600; // per point of (defender steal - 70); was 1/600
 const LANE_STEAL_PASS_SLOPE = 1 / 2400; // per point of (passer pass - 70) — reduces the chance
-const LANE_STEAL_CAP = 0.018; // was 0.06
+const LANE_STEAL_ROUTE_RISK = 0.012; // route-risk bump for long/diagonal passing lanes
+const LANE_STEAL_CAP = 0.045; // was 0.06
+
+// Pass route selection. Good-IQ handlers should not attempt low-percentage
+// skip passes and diagonal entry feeds just because the target is open.
+const PASS_RISK_LONG_START = 17;
+const PASS_RISK_LONG_RANGE = 20;
+const PASS_RISK_LATERAL_START = 14;
+const PASS_RISK_LATERAL_RANGE = 18;
+const PASS_RISK_ENTRY_DEPTH = 13.75;
+const PASS_RISK_ENTRY_FROM_DEPTH = 12;
+const PASS_RISK_ENTRY_WIDTH = 8;
+const PASS_RISK_CORNER_Y = 8;
 
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
 const THREE_UTILITY_MULT = 0.85; // scales three-shoot utility; high-shootThree still out-shoots low
-// Compress how strongly the shootThree tendency swings three volume: 1 = full
-// (0.5..1.5) swing, lower values pull both extremes toward neutral so low-three
-// teams clear the floor (>=28) while high-three teams stay under the ceiling.
-const THREE_TEND_COMPRESS = 0.62;
+// Controls how strongly the shootThree tendency swings three volume: 1 = full
+// (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
+// visible after route-risk tuning removes some easy pass-first outcomes.
+const THREE_TEND_COMPRESS = 1.1;
 // Flat additive bump to open three-point utility. Lifts low-three teams toward
 // the 3PA floor WITHOUT scaling up high-volume teams (they are already shooting),
 // so it tightens the floor without pushing the pace-and-space ceiling over.
@@ -244,7 +295,7 @@ export function offenseDecide(): void {
         tt = shotTypeFor(td);
       const tev = makeProb(t, tt, tc) * (tt === "three" ? 3 : 2);
       const advance = dist(t, h) < dh - 2 ? 0.3 : 0; // reward feeding closer looks
-      const pu = to * 0.9 + tev * 0.5 + advance;
+      const pu = to * 0.9 + tev * 0.5 + advance - passSelectionPenalty(bh, t, h);
       if (pu > bestPU) {
         bestPU = pu;
         bestPass = t;
@@ -725,6 +776,7 @@ function startPass(from: Player, to: Player): void {
   G.ball.from = from;
   G.ball.passDur = Math.max(2, (dist(from, to) * 0.6) | 0);
   const def = defTeam();
+  const routeRisk = passRouteRisk(from, to, hoop());
 
   // bad-pass / handling turnover: the pass itself is errant or deflected.
   // Scales with the passer's (low) pass attribute and with defensive pressure
@@ -736,7 +788,10 @@ function startPass(from: Player, to: Player): void {
       if (dist(d, to) < BAD_PASS_RECV_RADIUS) recvPressure = BAD_PASS_RECV_PRESSURE;
     }
     const badP = clamp(
-      BAD_PASS_BASE + Math.max(0, (70 - from.attr.pass) * BAD_PASS_PASS_SLOPE) + recvPressure,
+      BAD_PASS_BASE +
+        Math.max(0, (70 - from.attr.pass) * BAD_PASS_PASS_SLOPE) +
+        recvPressure +
+        routeRisk * (BAD_PASS_ROUTE_BASE + Math.max(0, 70 - from.attr.pass) * BAD_PASS_ROUTE_PASS_SLOPE),
       0,
       BAD_PASS_CAP,
     );
@@ -780,7 +835,10 @@ function startPass(from: Player, to: Player): void {
     if (ld < 2.0 && dist(d, from) > 4 && dist(d, to) > 4) {
       const sp =
         clamp(
-          LANE_STEAL_BASE + (d.attr.steal - 70) * LANE_STEAL_STEAL_SLOPE - (from.attr.pass - 70) * LANE_STEAL_PASS_SLOPE,
+          LANE_STEAL_BASE +
+            (d.attr.steal - 70) * LANE_STEAL_STEAL_SLOPE -
+            (from.attr.pass - 70) * LANE_STEAL_PASS_SLOPE +
+            routeRisk * LANE_STEAL_ROUTE_RISK,
           0,
           LANE_STEAL_CAP,
         ) * tendencyFactor(effectiveTendencies(d).gambleSteal);
