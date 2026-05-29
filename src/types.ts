@@ -124,6 +124,8 @@ export type Player = {
   name: string;
   ob?: OffBallState;
   tendencies?: Tendencies;
+  offLaneT?: number;
+  defLaneT?: number;
 };
 
 export type ShotMeta = {

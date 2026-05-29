@@ -33,7 +33,11 @@ export function beginScoreTransition(skipScore: boolean): void {
   let pg = off.find((p) => p.role === "handler");
   if (!pg || pg === inb) pg = off.find((p) => p !== inb);
   off.forEach((p) => (p.hasBall = false));
-  players().forEach((p) => (p.target = { x: p.x, y: p.y })); // freeze briefly (no stale drift)
+  players().forEach((p) => {
+    p.target = { x: p.x, y: p.y };
+    p.offLaneT = 0;
+    p.defLaneT = 0;
+  }); // freeze briefly (no stale drift)
   G.trans = { phase: skipScore ? "inbound" : "score", t: 0, scored, inbounder: inb, pg: pg! };
   const back = scored === "R" ? 1 : -1;
   if (skipScore) {
@@ -177,6 +181,11 @@ export function updateTransition(): void {
 function settleHalfCourt(pg: Player): void {
   const off = offTeam(),
     def = defTeam();
+  off.forEach((p, i) => {
+    p.hasBall = p === pg;
+    p.role = i === 0 ? "handler" : i === 4 ? "screener" : "spacer";
+    p.ob = { state: "space", t: 0, spot: i };
+  });
   def.forEach((d, i) => (d.assign = off[i]));
   G.ball.state = "held";
   G.ball.holder = pg;
@@ -190,6 +199,10 @@ function settleHalfCourt(pg: Player): void {
   G.screen = null;
   G.pnrSwitched = false;
   G.driving = false;
+  players().forEach((p) => {
+    p.offLaneT = 0;
+    p.defLaneT = 0;
+  });
   G.trans = null;
 }
 
@@ -207,6 +220,8 @@ export function beginLiveTransition(recoverer: Player): void {
   off.forEach((p) => (p.hasBall = false));
   players().forEach((p) => {
     if (!p.target) p.target = { x: p.x, y: p.y };
+    p.offLaneT = 0;
+    p.defLaneT = 0;
   });
   // best ball-handler by stronger hand (default until force-direction exists)
   const handleOf = (p: Player): number => Math.max(p.attr.handleLeft, p.attr.handleRight);

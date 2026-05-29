@@ -1,8 +1,31 @@
 import { G, offTeam, defTeam, hoop } from "../core/state.js";
 import { dist, clamp, lerp } from "../core/math.js";
+import { rules } from "../core/rules.js";
 import { tacFor } from "../tactics/tactics.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
-import type { Player, Tactics } from "../types.js";
+import type { Player, Point, Tactics } from "../types.js";
+
+const LANE_MIN_Y = 17;
+const LANE_MAX_Y = 33;
+const LANE_DEPTH_FROM_HOOP = 13.75;
+const DEF_LANE_CLEAR_WARN_T = 1.5;
+const DEF_LANE_LOW_IQ_EXTRA_T = 1.0;
+
+function paintBand(pt: Point, h: Point): boolean {
+  return Math.abs(pt.x - h.x) <= LANE_DEPTH_FROM_HOOP && pt.y >= LANE_MIN_Y && pt.y <= LANE_MAX_Y;
+}
+
+function spacingAwareness(p: Player): number {
+  return clamp((p.attr.iq - 35) / 55, 0.35, 1.15);
+}
+
+function shouldClearDefensiveLane(d: Player, off: Player[], h: Point): boolean {
+  if (!rules.defensiveThreeSeconds || !paintBand(d, h)) return false;
+  if (off.some((p) => dist(d, p) <= rules.defensiveThreeSecondsGuardingDistance)) return false;
+  const awareness = spacingAwareness(d);
+  const warnAt = DEF_LANE_CLEAR_WARN_T + (1.15 - awareness) * DEF_LANE_LOW_IQ_EXTRA_T;
+  return (d.defLaneT ?? 0) >= warnAt;
+}
 
 /* ---------- DEFENSE AI ---------- */
 export function defenseMove(): void {
@@ -52,6 +75,11 @@ export function defenseMove(): void {
         dy = m.y - h.y,
         dd = Math.hypot(dx, dy) || 1;
       d.target = { x: m.x - (dx / dd) * presDist * 0.5, y: m.y - (dy / dd) * presDist * 0.5 };
+    }
+    if (!onBall && shouldClearDefensiveLane(d, off, h)) {
+      const side = d.y < 25 ? -1 : 1;
+      const dir = G.attackHoop === "R" ? -1 : 1;
+      d.target = { x: h.x + dir * 15, y: side < 0 ? 14 : 36 };
     }
   }
 
