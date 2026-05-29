@@ -2,6 +2,7 @@
    Kept in their own module so offense and transition need not import each other. */
 
 import { dist, clamp } from "../core/math.js";
+import { simTunables } from "./tunables.js";
 import type { Player, ShotType } from "../types.js";
 
 export function nearestDef(p: Player, def: Player[]): { d: Player | null; dd: number } {
@@ -18,6 +19,7 @@ export function nearestDef(p: Player, def: Player[]): { d: Player | null; dd: nu
 }
 
 export function makeProb(shooter: Player, type: ShotType, contest: number): number {
+  const tuning = simTunables().shooting;
   const base = { rim: 0.68, close: 0.5, mid: 0.44, three: 0.372 }[type];
   const sk =
     type === "rim" || type === "close"
@@ -25,8 +27,8 @@ export function makeProb(shooter: Player, type: ShotType, contest: number): numb
       : type === "mid"
         ? shooter.attr.mid
         : shooter.attr.three;
-  let p = base + ((sk - 55) / 55) * 0.24; // shooting skill
-  const cpen = type === "rim" ? 0.15 : type === "three" ? 0.21 : 0.25;
+  let p = base + ((sk - 55) / 55) * 0.24 * tuning.skillScale; // shooting skill
+  const cpen = (type === "rim" ? 0.15 : type === "three" ? 0.21 : 0.25) * tuning.contestScale;
   p -= contest * cpen; // defender contest
   p -= shooter.fatigue * 0.05;
   return clamp(p, 0.02, 0.97);

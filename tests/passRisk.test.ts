@@ -40,7 +40,7 @@ function playerAt(pt: Point, pass: number, iq: number): Player {
     target: null,
     role: "",
     assign: null,
-    stats: { pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fta: 0, ftm: 0 },
+    stats: { pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fta: 0, ftm: 0 },
     name: "Passer",
   };
 }

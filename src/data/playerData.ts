@@ -27,7 +27,7 @@ export function validateFreeAgentsData(obj: unknown, sourceLabel: string): FreeA
 }
 
 function zeroStats(): Player["stats"] {
-  return { pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fta: 0, ftm: 0 };
+  return { pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fta: 0, ftm: 0 };
 }
 
 export function toEnginePlayer(pd: PlayerData, team: TeamSide): Player {
