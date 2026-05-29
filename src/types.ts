@@ -133,6 +133,7 @@ export type ShotMeta = {
   made: boolean;
   pts: number;
   type: ShotType;
+  origin: Point;
 };
 
 export type Ball = {

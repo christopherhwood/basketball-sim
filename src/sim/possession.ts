@@ -3,12 +3,77 @@ import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll } from "./movement.js";
-import { offenseDecide } from "./offense.js";
+import { offenseDecide, isInsidePlayer } from "./offense.js";
 import { defenseMove } from "./defense.js";
 import { resolveShot, updateFreeThrows } from "./resolution.js";
 import { updateTransition, beginScoreTransition } from "./transition.js";
 import { enforceThreeSeconds, resetThreeSecondTimers } from "./threeSeconds.js";
 import type { HoopSide, Point, Player } from "../types.js";
+
+/* ---------- POST-SHOT CONVERGENCE CONSTANTS ----------
+   While the ball is in the air, all players move to role-appropriate rebound
+   positions so the carom-landing distribution is covered by multiple bodies.
+   Bigs converge to the paint/blocks; guards/wings converge to the mid-rebound
+   band where long caroms and kick-outs land. Defenders box out by holding
+   goalside of their man — distributing rather than collapsing onto the rim. */
+
+// Bigs crash to the near-block area
+const CONV_BIG_DIST_FROM_HOOP = 6.5;   // ft from hoop for inside rebound position
+const CONV_BIG_Y_SPREAD = 10.0;         // half-spread in y; wider spread across carom band
+
+// Guards/wings converge to the perimeter rebound band (long caroms land here)
+const CONV_GUARD_DIST_FROM_HOOP = 16.0; // ft from hoop: mid-rebound band
+const CONV_GUARD_Y_SPREAD = 13.0;       // half-spread in y; was 11.0 — wider lateral spread
+
+// Defenders box out by sealing slightly rim-side of their assigned man, staying distributed
+const CONV_DEF_BOXOUT_OFFSET = 2.8;    // ft toward rim from their man; was 1.8 — stronger box-out
+
+/* Compute a role-appropriate rebound convergence target for one player. */
+function reboundConvergeTarget(p: Player, h: Point, dir: number, slotIndex: number): Point {
+  const side = slotIndex % 2 === 0 ? -1 : 1; // alternate left/right of lane
+  if (isInsidePlayer(p)) {
+    return {
+      x: clamp(h.x + dir * CONV_BIG_DIST_FROM_HOOP, 1, COURT_L - 1),
+      y: clamp(h.y + side * CONV_BIG_Y_SPREAD, 3, 47),
+    };
+  }
+  return {
+    x: clamp(h.x + dir * CONV_GUARD_DIST_FROM_HOOP, 1, COURT_L - 1),
+    y: clamp(h.y + side * CONV_GUARD_Y_SPREAD, 3, 47),
+  };
+}
+
+/* Move all players toward role-appropriate rebound zones while a shot is in flight. */
+function updateShotFlightConvergence(): void {
+  const h = hoop();
+  const dir = G.attackHoop === "R" ? -1 : 1;
+  const off = offTeam();
+  const def = defTeam();
+
+  // offensive players crash toward role-appropriate rebound zones
+  let offSlot = 0;
+  for (const p of off) {
+    if (p.hasBall) continue; // shooter stays put
+    p.target = reboundConvergeTarget(p, h, dir, offSlot);
+    offSlot++;
+  }
+
+  // defenders box out: seal just goalside of their assigned offensive man,
+  // staying distributed rather than collapsing everyone onto the rim
+  for (const d of def) {
+    const man = d.assign;
+    if (!man) continue;
+    const mx = man.x,
+      my = man.y;
+    // step from man toward rim by the box-out offset
+    const dToH = dist(man, h);
+    const stepFrac = dToH > 0.5 ? CONV_DEF_BOXOUT_OFFSET / dToH : 0;
+    d.target = {
+      x: clamp(lerp(mx, h.x, stepFrac), 1, COURT_L - 1),
+      y: clamp(lerp(my, h.y, stepFrac), 3, 47),
+    };
+  }
+}
 
 /* ---------- POSSESSION SETUP ----------
    Reset to a half-court set. Offense's PG gets the ball near the top of
@@ -115,6 +180,7 @@ export function tick(): void {
     const f = clamp(G.ball.flight / (G.ball.passDur as number), 0, 1);
     G.ball.x = lerp((G.ball.from as Player).x, hoop().x, f);
     G.ball.y = lerp((G.ball.from as Player).y, hoop().y, f) - Math.sin(f * Math.PI) * 6; // arc
+    updateShotFlightConvergence();
     if (f >= 1) {
       resolveShot();
       return;

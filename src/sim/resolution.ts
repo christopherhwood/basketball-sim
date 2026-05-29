@@ -22,6 +22,37 @@ const BLOCK_CAP = 0.13; // max block probability; was 0.28
 const REBOUND_WEIGHT_MULT = 0.18; // per normalized weight unit
 const REBOUND_WEIGHT_NORM = 10; // (weight - 220) / NORM -> normalized weight units
 
+// --- carom direction distribution ---
+// Research: weak/opposite-side ~48%, same-side ~33%, center ~19%.
+const CAROM_PROB_OPPOSITE = 0.48; // cumulative threshold for opposite-side carom
+const CAROM_PROB_CENTER = 0.67;   // cumulative threshold for center carom (0.48+0.19); same-side is remainder
+
+// --- carom distance model ---
+// Opposite/weak-side caroms scale with shot distance (long shots -> longer caroms).
+// Same-side and center caroms land closer to the rim regardless of distance.
+const CAROM_OPP_BASE_DIST = 4.5;   // ft from rim: base distance for opposite-side carom
+const CAROM_OPP_DIST_SCALE = 0.28; // fraction of shot distance added to opposite carom
+const CAROM_SAME_BASE_DIST = 3.0;  // ft from rim: same-side caroms land close
+const CAROM_SAME_DIST_SCALE = 0.10; // small fraction of shot distance for same-side
+const CAROM_CENTER_BASE_DIST = 2.5; // center caroms land very close
+const CAROM_MAX_DIST = 14.0;        // 97.5th-percentile cap: ~97.5% of boards within 14 ft
+const CAROM_JITTER = 2.5;           // lateral/radial random spread around the carom spot
+
+// --- free throw carom ---
+const CAROM_FT_DIST = 3.5; // ft from rim: free-throw caroms land short and center
+
+// --- weighted-random rebound winner ---
+// Position (proximity to carom) dominates; rating is a modest multiplier.
+// Lower decay = softer/flatter proximity curve = more spread across positions.
+const REB_PROXIMITY_DECAY = 0.34;  // exponential decay; was 0.38
+const REB_RATING_MIN = 0.60;       // minimum rating multiplier (low rebound attr player); was 0.70
+const REB_RATING_MAX = 1.55;       // maximum rating multiplier (elite rebounder); was 1.40
+const REB_RATING_PIVOT = 50;       // rebound attr at which multiplier = 1.0
+const REB_RATING_SCALE = 0.0095;   // (attr - pivot) * scale; was 0.007 — wider skill spread
+const REB_BOXOUT_DEF_BONUS = 2.20; // defensive box-out edge multiplier; was 1.22 — reduces OREB%
+const REB_CRASH_MAX_BONUS = 0.3; // crashGlass weight boost for offensive players (1+bonus). NOTE: effect is modest under the soft positional draw (proximity dominates); strengthen via crashGlass-scaled convergence in the motion-offense overhaul.
+const REB_LUCK_FLOOR = 0.0;        // flat base added to proximity weight so far-away players get a chance
+
 function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   let best: Player | null = null,
     bd = 1e9;
@@ -76,7 +107,7 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
   G.ball.from = sh;
   G.ball.flight = 0;
   G.ball.passDur = Math.max(4, Math.round(dist(sh, hoop()) * 0.5));
-  G.ball.shotMeta = { shooter: sh, made: chance(mp), pts, type };
+  G.ball.shotMeta = { shooter: sh, made: chance(mp), pts, type, origin: { x: sh.x, y: sh.y } };
 }
 
 export function resolveShot(): void {
@@ -100,47 +131,130 @@ export function resolveShot(): void {
   }
 }
 
+function caromLandingSpot(sh: Player, h: Point): Point {
+  const meta = G.ball.shotMeta;
+  const origin: { x: number; y: number } = meta?.origin ?? { x: sh.x, y: sh.y };
+  const shotDist = dist(origin, h);
+
+  // free-throw: short carom near the rim center
+  if (meta?.type === undefined || (G.ft && G.ball.state === "freethrow")) {
+    const angle = rng() * Math.PI * 2;
+    return {
+      x: clamp(h.x + Math.cos(angle) * CAROM_FT_DIST, 1, 93),
+      y: clamp(h.y + Math.sin(angle) * CAROM_FT_DIST, 1, 49),
+    };
+  }
+
+  // shooter-side: the side of the court the shooter is on (relative to centerline y=25)
+  const shooterSide = origin.y < 25 ? -1 : 1; // -1 = low side, +1 = high side
+
+  // pick carom direction via rng roulette
+  const roll = rng();
+  let caromDist: number;
+  let lateralSign: number; // which y-side does the carom go?
+
+  if (roll < CAROM_PROB_OPPOSITE) {
+    // opposite/weak-side: longer carom, scales with shot distance
+    caromDist = CAROM_OPP_BASE_DIST + shotDist * CAROM_OPP_DIST_SCALE;
+    lateralSign = -shooterSide; // opposite side from shooter
+  } else if (roll < CAROM_PROB_CENTER) {
+    // center carom: short, close to rim center
+    caromDist = CAROM_CENTER_BASE_DIST;
+    lateralSign = 0; // no lateral bias
+  } else {
+    // same-side carom: shorter
+    caromDist = CAROM_SAME_BASE_DIST + shotDist * CAROM_SAME_DIST_SCALE;
+    lateralSign = shooterSide;
+  }
+
+  caromDist = clamp(caromDist, 1.5, CAROM_MAX_DIST);
+
+  // direction from hoop toward shooter for the radial axis, then rotate based on lateral
+  const dx = origin.x - h.x,
+    dy = origin.y - h.y;
+  const shotAngle = Math.atan2(dy, dx);
+  // for opposite/same-side, add a lateral offset from the shooter angle
+  const lateralOffset = lateralSign === 0 ? 0 : lateralSign * (Math.PI * 0.28);
+  const caromAngle = shotAngle + lateralOffset + (rng() - 0.5) * CAROM_JITTER * 0.18;
+
+  // radial jitter in distance
+  const distJitter = (rng() - 0.5) * CAROM_JITTER;
+  const finalDist = clamp(caromDist + distJitter, 1.5, CAROM_MAX_DIST);
+
+  return {
+    x: clamp(h.x + Math.cos(caromAngle) * finalDist, 1, 93),
+    y: clamp(h.y + Math.sin(caromAngle) * finalDist, 1, 49),
+  };
+}
+
 function missAndRebound(sh: Player): void {
   const h = hoop(),
     off = offTeam(),
     def = defTeam();
   const defSet = new Set(def);
-  let best: Player | null = null,
-    bw = -1;
-  for (const p of off.concat(def)) {
-    const dd = dist(p, h);
-    if (dd > 13) continue;
+
+  // compute the directional carom landing spot
+  const carom = caromLandingSpot(sh, h);
+
+  // build soft-weight roulette over all players
+  const all = off.concat(def);
+  const weights: number[] = [];
+  let totalW = 0;
+
+  for (const p of all) {
     const isDef = defSet.has(p);
-    // offensive players crash the glass according to their crashGlass tendency:
-    // 0 -> nothing, 50 -> mild bump, 100 -> meaningful contest (still below the +14 box-out)
-    const crash = !isDef && p.team === G.offense ? (effectiveTendencies(p).crashGlass / 100) * 20 : 0;
-    // heavier players hold rebounding position; bounded so it nudges boards
-    // without overpowering rebound skill, height, or the box-out edge.
-    const weightTerm = clamp(((p.attr.weight - 220) / REBOUND_WEIGHT_NORM) * REBOUND_WEIGHT_MULT, -3, 6);
-    const w =
-      p.attr.rebound * 0.6 +
-      p.attr.height * 8 +
-      p.attr.vertical * 0.25 +
-      p.attr.strength * 0.2 +
-      weightTerm +
-      (13 - dd) * 4 +
-      (isDef ? 14 : 0) +
-      crash +
-      rng() * 40; // defense boxes out -> edge
-    if (w > bw) {
-      bw = w;
-      best = p;
+    const dCarom = dist(p, carom);
+
+    // proximity to carom landing spot dominates (exponential decay + luck floor)
+    const proxWeight = Math.exp(-REB_PROXIMITY_DECAY * dCarom) + REB_LUCK_FLOOR;
+
+    // rating factor: modest multiplier around 1.0
+    const ratingMult = clamp(
+      REB_RATING_MIN + (p.attr.rebound - REB_RATING_PIVOT) * REB_RATING_SCALE,
+      REB_RATING_MIN,
+      REB_RATING_MAX,
+    );
+
+    // height/vertical add a small physical edge (not dominant)
+    const physMult = 1.0 + clamp((p.attr.height - 6.5) * 0.06 + p.attr.vertical * 0.003, -0.15, 0.30);
+
+    // box-out: defenders get a small positional edge from boxing out
+    const boxoutMult = isDef ? REB_BOXOUT_DEF_BONUS : 1.0;
+
+    // crashGlass tendency bonus for offensive players
+    const crashBonus =
+      !isDef && p.team === G.offense
+        ? (effectiveTendencies(p).crashGlass / 100) * REB_CRASH_MAX_BONUS
+        : 0;
+
+    // weight term for body mass (position-holding)
+    const weightBonus = clamp(((p.attr.weight - 220) / REBOUND_WEIGHT_NORM) * REBOUND_WEIGHT_MULT, -0.05, 0.12);
+
+    const w = Math.max(0.001, proxWeight * ratingMult * physMult * boxoutMult * (1 + crashBonus + weightBonus));
+    weights.push(w);
+    totalW += w;
+  }
+
+  // weighted-random draw (roulette wheel) — deterministic via rng()
+  let pick = rng() * totalW;
+  let best: Player | null = null;
+  for (let i = 0; i < all.length; i++) {
+    pick -= weights[i];
+    if (pick <= 0) {
+      best = all[i];
+      break;
     }
   }
+  if (!best) best = all[all.length - 1]; // floating-point safety
+
   if (!best) {
-    // nobody home, give to nearest defender
     best = nearestDef(h, def).d;
   }
   if (!best) return;
+
   best.stats.reb++;
   logEv(`${best.name} grabs the rebound`);
   if (best.team === G.offense) {
-    // offensive board, keep ball, reset clock to 14
     G.ball.state = "held";
     G.ball.holder = best;
     best.hasBall = true;

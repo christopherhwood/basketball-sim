@@ -439,7 +439,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
 /* Classifies an off-ball player as an INSIDE (big) role vs a perimeter shooter.
    A low-three OR high-postUp player operates near the rim; everyone else spaces
    the floor. Drives inside-vs-perimeter spot assignment in offBallMove. */
-function isInsidePlayer(p: Player): boolean {
+export function isInsidePlayer(p: Player): boolean {
   const t = effectiveTendencies(p);
   return t.shootThree < BIG_SHOOT_THREE_MAX || t.postUp >= BIG_POST_PIVOT;
 }
