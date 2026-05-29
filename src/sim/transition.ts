@@ -2,7 +2,7 @@ import { HOOP, DT } from "../core/constants.js";
 import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { spotsFor } from "./possession.js";
-import { contestOf, makeProb } from "./offense.js";
+import { contestOf, makeProb } from "./shot.js";
 import { attemptShot } from "./resolution.js";
 import type { Player, Point } from "../types.js";
 
@@ -167,7 +167,7 @@ export function updateTransition(): void {
   }
 }
 
-export function settleHalfCourt(pg: Player): void {
+function settleHalfCourt(pg: Player): void {
   const off = offTeam(),
     def = defTeam();
   def.forEach((d, i) => (d.assign = off[i]));

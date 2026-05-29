@@ -132,7 +132,7 @@ export type Tactics = {
   action: "pnr" | "motion";
 };
 
-export type FeedEvent = { t: string; cls?: string };
+export type FeedEvent = { id: number; t: string; cls?: string };
 export type Screen = { ball: Player; screener: Player };
 export type ScoreFlash = { x: number; y: number; pts: number; team: TeamSide; t: number };
 export type Banner = { text: string; t: number };

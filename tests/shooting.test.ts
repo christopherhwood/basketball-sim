@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { makeProb, contestOf } from "../src/sim/offense.js";
+import { makeProb, contestOf } from "../src/sim/shot.js";
 import { threat } from "../src/sim/defense.js";
 import { seedRng, rng } from "../src/core/rng.js";
 import { clamp } from "../src/core/math.js";

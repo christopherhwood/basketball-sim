@@ -18,22 +18,23 @@ export function Controls(): React.JSX.Element {
 
   return (
     <div className="controls">
-      <button id="play" onClick={() => togglePlay()}>
+      <button type="button" id="play" onClick={() => togglePlay()}>
         {isRunning() ? "❚❚ pause" : "▶ play"}
       </button>
-      <button id="step" onClick={() => step()}>
+      <button type="button" id="step" onClick={() => step()}>
         step
       </button>
-      <button id="ff" onClick={() => simToEndOfQuarter()}>
+      <button type="button" id="ff" onClick={() => simToEndOfQuarter()}>
         » sim to end of qtr
       </button>
-      <button id="reset" className="warn" onClick={() => newMatchup(getCurrentRosters())}>
+      <button type="button" id="reset" className="warn" onClick={() => newMatchup(getCurrentRosters())}>
         reset game
       </button>
       <span className="speed">
         speed
         {SPEEDS.map((sp) => (
           <button
+            type="button"
             key={sp}
             data-sp={sp}
             className={speed === sp ? "on" : undefined}

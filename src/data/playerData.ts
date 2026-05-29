@@ -8,18 +8,12 @@ import type { Attributes, Player, PlayerData, TeamData, FreeAgentData, TeamSide 
 const ajv = new Ajv();
 ajv.addSchema([playerSchema, teamSchema, freeAgentsSchema]);
 
-const validatePlayer = ajv.getSchema("https://bball.local/schema/player.schema.json") as ValidateFunction<PlayerData>;
 const validateTeam = ajv.getSchema("https://bball.local/schema/team.schema.json") as ValidateFunction<TeamData>;
 const validateFreeAgents = ajv.getSchema("https://bball.local/schema/free-agents.schema.json") as ValidateFunction<FreeAgentData>;
 
 function fail(validate: ValidateFunction, sourceLabel: string): never {
   const text = ajv.errorsText(validate.errors, { separator: "; " });
   throw new Error(`invalid data in ${sourceLabel}: ${text}`);
-}
-
-export function validatePlayerData(obj: unknown, sourceLabel: string): PlayerData {
-  if (!validatePlayer(obj)) fail(validatePlayer, sourceLabel);
-  return obj;
 }
 
 export function validateTeamData(obj: unknown, sourceLabel: string): TeamData {

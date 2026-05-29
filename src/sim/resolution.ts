@@ -82,16 +82,17 @@ export function resolveShot(): void {
   }
 }
 
-export function missAndRebound(sh: Player): void {
+function missAndRebound(sh: Player): void {
   const h = hoop(),
     off = offTeam(),
     def = defTeam();
+  const defSet = new Set(def);
   let best: Player | null = null,
     bw = -1;
   for (const p of off.concat(def)) {
     const dd = dist(p, h);
     if (dd > 13) continue;
-    const isDef = def.includes(p);
+    const isDef = defSet.has(p);
     const w =
       p.attr.rebound * 0.6 +
       p.attr.height * 8 +
@@ -125,19 +126,11 @@ export function missAndRebound(sh: Player): void {
   }
 }
 
-export function turnover(recoverer: Player): void {
-  // possession flips to the recoverer's team
-  G.offense = recoverer.team;
-  G.attackHoop = recoverer.team === "home" ? G.homeAttack! : G.awayAttack!;
-  G.pendingAssist = null;
-  setupPossession(false);
-}
-
 /* ----- FREE THROWS as a visible state machine -----
    Sets shooter at the line, lines everyone up along the lane, then for each
    attempt: windup -> ball arcs to the rim -> show make/miss -> short pause.
    On the final miss the rebound is live; otherwise the defense inbounds. */
-export function setupFTLineup(sh: Player): void {
+function setupFTLineup(sh: Player): void {
   const h = hoop(),
     dir = G.attackHoop === "R" ? -1 : 1;
   const off = offTeam().filter((p) => p !== sh),
@@ -154,7 +147,7 @@ export function setupFTLineup(sh: Player): void {
   off.forEach((o, i) => (o.target = i < 2 ? block[2 + i] : { x: h.x + dir * 18, y: 42 }));
 }
 
-export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean): void {
+function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean): void {
   if (andOne) {
     // shot fell + foul: count bucket + 1 FT
     sh.stats.fga++;
@@ -237,9 +230,3 @@ export function updateFreeThrows(): void {
   }
 }
 
-export function changePossession(): void {
-  G.offense = G.offense === "home" ? "away" : "home";
-  G.attackHoop = G.offense === "home" ? G.homeAttack! : G.awayAttack!;
-  G.pendingAssist = null;
-  setupPossession(false);
-}
