@@ -6,6 +6,7 @@ import { Controls } from "./Controls.js";
 import { BoxScore } from "./BoxScore.js";
 import { MatchupSelect } from "./MatchupSelect.js";
 import { TacticsPanel } from "./TacticsPanel.js";
+import { CoachingPanel } from "./CoachingPanel.js";
 import { PlayByPlay } from "./PlayByPlay.js";
 
 export function App(): React.JSX.Element {
@@ -40,6 +41,7 @@ export function App(): React.JSX.Element {
         <div className="side">
           <MatchupSelect />
           <TacticsPanel />
+          <CoachingPanel />
 
           <div className="card">
             <h2>Play-by-play</h2>

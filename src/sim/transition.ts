@@ -4,7 +4,7 @@ import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { spotsFor } from "./possession.js";
 import { contestOf, makeProb } from "./shot.js";
 import { attemptShot } from "./resolution.js";
-import { tendenciesOf } from "./tendency.js";
+import { effectiveTendencies } from "./tendency.js";
 import type { Player, Point } from "../types.js";
 
 /* ----- SCORE TRANSITION -----
@@ -116,7 +116,7 @@ export function updateTransition(): void {
       // ball-handler's pushTransition biases how readily the team pushes:
       // 50 is neutral (matches the current back<=1 / runway>18 threshold), high pushes
       // more (tolerates an extra defender back and a shorter runway), low pulls it out.
-      const push = tendenciesOf(tr.pg).pushTransition;
+      const push = effectiveTendencies(tr.pg).pushTransition;
       const backTol = push >= 75 ? 2 : push < 25 ? 0 : 1;
       const runway = 18 - (push - 50) * 0.12;
       tr.fastbreak = tr.kind === "live" && back <= backTol && dist(tr.pg, atk) > runway;

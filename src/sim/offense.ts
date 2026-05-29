@@ -7,7 +7,7 @@ import { attemptShot } from "./resolution.js";
 import { beginLiveTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
-import { tendenciesOf, tendencyFactor } from "./tendency.js";
+import { effectiveTendencies, tendencyFactor } from "./tendency.js";
 import type { Player, Point, Tactics } from "../types.js";
 
 /* ---------- TURNOVER / STEAL / SHOT-SELECTION TUNING ----------
@@ -90,7 +90,7 @@ export function offenseDecide(): void {
         let tovP =
           (ON_BALL_TOV_BASE + Math.max(0, stealEdge) + Math.max(0, iqEdge)) *
           STRIP_PRESSURE_MULT[tac.pressure] *
-          tendencyFactor(tendenciesOf(onBallDef).gambleSteal);
+          tendencyFactor(effectiveTendencies(onBallDef).gambleSteal);
         if (G.driving) tovP *= STRIP_DRIVE_MULT;
         tovP = clamp(tovP, 0, ON_BALL_TOV_CAP);
         if (chance(tovP)) {
@@ -133,7 +133,7 @@ export function offenseDecide(): void {
 
     // zone-specific shooting tendency (driveRim doubles as rim-shooting propensity).
     // postUp has no mechanic yet and is intentionally left unwired.
-    const tendencies = tendenciesOf(bh);
+    const tendencies = effectiveTendencies(bh);
     const shootTend =
       type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
     let shootU = ev * selM * (0.35 + 0.65 * open) + urg * 2.4;
@@ -239,7 +239,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
     let bestScreen = -1;
     for (const p of off) {
       if (p === bh) continue;
-      const sc = tendenciesOf(p).screen;
+      const sc = effectiveTendencies(p).screen;
       if (sc > bestScreen) {
         bestScreen = sc;
         screener = p;
@@ -258,7 +258,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
         G.actionPhase = "roll";
       }
     } else if (G.actionPhase === "roll") {
-      const pops = screener.attr.three > 74 || tendenciesOf(screener).shootThree > 74;
+      const pops = screener.attr.three > 74 || effectiveTendencies(screener).shootThree > 74;
       screener.target = pops ? { x: h.x + dir * 22, y: 30 } : { x: h.x + dir * 4, y: 25 };
       G.screen = { ball: bh, screener };
     }
@@ -289,7 +289,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     if (!ob) continue;
     ob.t += DT;
     const d = defByAssign.get(p);
-    const cutFactor = tendencyFactor(tendenciesOf(p).driveRim);
+    const cutFactor = tendencyFactor(effectiveTendencies(p).driveRim);
     const shooterBig = threat(p) < 0.34;
     let home = spots[ob.spot] || spots[1];
     if (shooterBig) home = { x: h.x + dir * 4.5, y: ob.spot % 2 ? 17.5 : 32.5 }; // non-shooters play near the rim
@@ -421,7 +421,7 @@ function startPass(from: Player, to: Player): void {
       if (recover && rd < BAD_PASS_CLAIM_RADIUS) {
         const stealChance = clamp(
           BAD_PASS_STEAL_BASE +
-            (tendenciesOf(recover).gambleSteal - BAD_PASS_STEAL_GAMBLE_PIVOT) * BAD_PASS_STEAL_GAMBLE_SLOPE,
+            (effectiveTendencies(recover).gambleSteal - BAD_PASS_STEAL_GAMBLE_PIVOT) * BAD_PASS_STEAL_GAMBLE_SLOPE,
           0,
           1,
         );
@@ -449,7 +449,7 @@ function startPass(from: Player, to: Player): void {
           LANE_STEAL_BASE + (d.attr.steal - 70) * LANE_STEAL_STEAL_SLOPE - (from.attr.pass - 70) * LANE_STEAL_PASS_SLOPE,
           0,
           LANE_STEAL_CAP,
-        ) * tendencyFactor(tendenciesOf(d).gambleSteal);
+        ) * tendencyFactor(effectiveTendencies(d).gambleSteal);
       if (chance(sp)) {
         d.stats.stl++;
         from.stats.tov++;
