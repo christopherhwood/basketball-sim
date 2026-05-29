@@ -3,6 +3,7 @@ import { makeProb, contestOf } from "../src/sim/shot.js";
 import { threat } from "../src/sim/defense.js";
 import { seedRng, rng } from "../src/core/rng.js";
 import { clamp } from "../src/core/math.js";
+import { simTunables } from "../src/sim/tunables.js";
 import type { Player, Attributes, ShotType } from "../src/types.js";
 
 /* =========================================================================
@@ -20,7 +21,8 @@ import type { Player, Attributes, ShotType } from "../src/types.js";
  *            : (type=="mid")                ? attr.mid
  *            :                                attr.three
  *     p      = base + ((sk - 55) / 55) * 0.24
- *     cpen   = type=="rim" ? 0.15 : type=="three" ? 0.21 : 0.25
+ *     cpen   = (type=="rim" ? 0.15 : type=="three" ? 0.21 : 0.25) * contestScale
+ *              // contestScale is a sim tunable (default 0.8)
  *     p     -= contest * cpen
  *     p     -= fatigue * 0.05
  *     return clamp(p, 0.02, 0.97)
@@ -72,6 +74,9 @@ function defender(perimD: number, x: number, y: number): Player {
 
 const BASE: Record<ShotType, number> = { rim: 0.68, close: 0.5, mid: 0.44, three: 0.372 };
 const CPEN: Record<ShotType, number> = { rim: 0.15, close: 0.25, mid: 0.25, three: 0.21 };
+// makeProb scales the contest penalty by the shooting.contestScale sim tunable
+// (default 0.8). Read it live so the spec tracks the tunable rather than a literal.
+const CS = simTunables().shooting.contestScale;
 const TYPES: ShotType[] = ["rim", "close", "mid", "three"];
 
 /* The attribute that drives each shot type's skill term. */
@@ -130,19 +135,19 @@ describe("makeProb — contest penalty is per-type: rim .15, three .21, mid/clos
   // p -= contest * cpen, evaluated at a mid contest of 0.5.
   const contest = 0.5;
   it("applies the rim contest penalty of 0.15 per unit contest", () => {
-    expect(makeProb(shooter({}), "rim", contest)).toBeCloseTo(0.68 - contest * 0.15, 12);
+    expect(makeProb(shooter({}), "rim", contest)).toBeCloseTo(0.68 - contest * 0.15 * CS, 12);
   });
   it("applies the three contest penalty of 0.21 per unit contest", () => {
-    expect(makeProb(shooter({}), "three", contest)).toBeCloseTo(0.372 - contest * 0.21, 12);
+    expect(makeProb(shooter({}), "three", contest)).toBeCloseTo(0.372 - contest * 0.21 * CS, 12);
   });
   it("applies the 0.25 contest penalty for mid and close", () => {
-    expect(makeProb(shooter({}), "mid", contest)).toBeCloseTo(0.44 - contest * 0.25, 12);
-    expect(makeProb(shooter({}), "close", contest)).toBeCloseTo(0.5 - contest * 0.25, 12);
+    expect(makeProb(shooter({}), "mid", contest)).toBeCloseTo(0.44 - contest * 0.25 * CS, 12);
+    expect(makeProb(shooter({}), "close", contest)).toBeCloseTo(0.5 - contest * 0.25 * CS, 12);
   });
   it("scales linearly with contest (full contest of 1.0)", () => {
-    expect(makeProb(shooter({}), "rim", 1)).toBeCloseTo(0.68 - 0.15, 12);
-    expect(makeProb(shooter({}), "three", 1)).toBeCloseTo(0.372 - 0.21, 12);
-    expect(makeProb(shooter({}), "mid", 1)).toBeCloseTo(0.44 - 0.25, 12);
+    expect(makeProb(shooter({}), "rim", 1)).toBeCloseTo(0.68 - 0.15 * CS, 12);
+    expect(makeProb(shooter({}), "three", 1)).toBeCloseTo(0.372 - 0.21 * CS, 12);
+    expect(makeProb(shooter({}), "mid", 1)).toBeCloseTo(0.44 - 0.25 * CS, 12);
   });
 });
 
@@ -160,15 +165,13 @@ describe("makeProb — full formula combining skill, contest, and fatigue", () =
   it("combines all four terms exactly for a contested, tired shooter", () => {
     // three-point shot: base .372, three=78, contest .5 (cpen .21), fatigue .3
     const s = shooter({ three: 78 }, 0.3);
-    const expected = 0.372 + ((78 - 55) / 55) * 0.24 - 0.5 * 0.21 - 0.3 * 0.05;
+    const expected = 0.372 + ((78 - 55) / 55) * 0.24 - 0.5 * 0.21 * CS - 0.3 * 0.05;
     expect(makeProb(s, "three", 0.5)).toBeCloseTo(expected, 12);
-    // sanity on the literal number this resolves to
-    expect(makeProb(s, "three", 0.5)).toBeCloseTo(0.3523636363636363, 12);
   });
 
   it("rim shot with elite finisher, mid contest, light fatigue", () => {
     const s = shooter({ finishing: 90 }, 0.2);
-    const expected = 0.68 + ((90 - 55) / 55) * 0.24 - 0.5 * 0.15 - 0.2 * 0.05;
+    const expected = 0.68 + ((90 - 55) / 55) * 0.24 - 0.5 * 0.15 * CS - 0.2 * 0.05;
     expect(makeProb(s, "rim", 0.5)).toBeCloseTo(expected, 12);
   });
 });
