@@ -34,7 +34,7 @@ replacing the whole engine.
 2. Run a small calibration search:
 
    ```bash
-   npm run calibrate -- --home harbor-city-wolves --away summit-valley-rampart --games 20 --iterations 30
+   npm run calibrate -- --home harbor-city-wolves --away summit-valley-rampart --games 20 --iterations 30 --out /tmp/candidate.json
    ```
 
 3. Inspect the output:
@@ -46,6 +46,7 @@ replacing the whole engine.
 4. Promote a candidate only after a larger validation run and tests:
 
    ```bash
+   npm run sim -- --games 500 --neutral-tactics --tunables /tmp/candidate.json
    npm run sim -- --games 500 --neutral-tactics --json
    npm test
    ```
@@ -58,3 +59,16 @@ overfitting one data source or roster pair.
 
 Golden tests still protect deterministic replay. Calibration metrics protect
 statistical behavior.
+
+## V1 Calibrated Defaults
+
+The first promoted parameter set is intentionally small:
+
+- `shooting.contestScale = 0.80`
+- `turnovers.onBallScale = 0.65`
+- `turnovers.badPassScale = 0.65`
+- `turnovers.laneStealScale = 0.75`
+
+This keeps neutral side bias low while moving generated-roster games toward
+NBA-like pace, efficiency, turnover rate, and steal rate. Blocks and assist rate
+remain separate follow-up tuning problems.

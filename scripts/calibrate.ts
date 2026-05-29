@@ -5,7 +5,7 @@
  *   npm run calibrate -- --home harbor-city-wolves --away summit-valley-rampart --swap
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runSimBatch } from "./simCore.js";
 import { scoreCalibration, type CalibrationProfile, type CalibrationScore } from "../src/sim/calibration.js";
@@ -159,7 +159,10 @@ function main(): void {
     summary: best.summary,
   };
 
-  console.log(JSON.stringify(output, null, 2));
+  const json = `${JSON.stringify(output, null, 2)}\n`;
+  const outPath = str(args, "--out");
+  if (outPath) writeFileSync(resolve(outPath), json);
+  else console.log(json);
 }
 
 main();
