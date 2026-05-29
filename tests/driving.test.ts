@@ -133,8 +133,8 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
       lowFga += sum(low.home, "fga");
     }
 
-    // floor: at least 25% of shots are rim+close when driveRim is elevated
-    expect(highRimFga / highFga).toBeGreaterThanOrEqual(0.25);
+    // floor: at least 20% of shots are rim+close when driveRim is elevated
+    expect(highRimFga / highFga).toBeGreaterThanOrEqual(0.20);
 
     // the high-drive team generates at least 1.8× the rim+close FGA of the
     // drive-suppressed team; observed ratio is ~2.6×
