@@ -50,16 +50,16 @@ export type TunableSpec = {
 export const DEFAULT_SIM_TUNABLES: SimTunables = {
   shooting: {
     skillScale: 1,
-    contestScale: 1,
+    contestScale: 0.8,
   },
   fouls: {
     insideScale: 1,
     perimeterScale: 1,
   },
   turnovers: {
-    onBallScale: 1,
-    badPassScale: 1,
-    laneStealScale: 1,
+    onBallScale: 0.65,
+    badPassScale: 0.65,
+    laneStealScale: 0.75,
   },
   rebounding: {
     defensiveBoxoutScale: 1,
@@ -74,12 +74,12 @@ export const DEFAULT_SIM_TUNABLES: SimTunables = {
 
 export const TUNABLE_SPECS: TunableSpec[] = [
   { key: "shooting.skillScale", label: "shooting skill influence", default: 1, min: 0.65, max: 1.35, unit: "multiplier", primaryMetric: "fgPct" },
-  { key: "shooting.contestScale", label: "contest penalty", default: 1, min: 0.65, max: 1.45, unit: "multiplier", primaryMetric: "efgPct" },
+  { key: "shooting.contestScale", label: "contest penalty", default: 0.8, min: 0.65, max: 1.45, unit: "multiplier", primaryMetric: "efgPct" },
   { key: "fouls.insideScale", label: "inside foul rate", default: 1, min: 0.65, max: 1.35, unit: "multiplier", primaryMetric: "ftRate" },
   { key: "fouls.perimeterScale", label: "perimeter foul rate", default: 1, min: 0.65, max: 1.35, unit: "multiplier", primaryMetric: "ftRate" },
-  { key: "turnovers.onBallScale", label: "on-ball turnover rate", default: 1, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "tovPct" },
-  { key: "turnovers.badPassScale", label: "bad-pass turnover rate", default: 1, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "tovPct" },
-  { key: "turnovers.laneStealScale", label: "lane steal rate", default: 1, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "stlPerGame" },
+  { key: "turnovers.onBallScale", label: "on-ball turnover rate", default: 0.65, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "tovPct" },
+  { key: "turnovers.badPassScale", label: "bad-pass turnover rate", default: 0.65, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "tovPct" },
+  { key: "turnovers.laneStealScale", label: "lane steal rate", default: 0.75, min: 0.5, max: 1.6, unit: "multiplier", primaryMetric: "stlPerGame" },
   { key: "rebounding.defensiveBoxoutScale", label: "defensive box-out edge", default: 1, min: 0.7, max: 1.35, unit: "multiplier", primaryMetric: "orbRate" },
   { key: "rebounding.crashGlassScale", label: "crash-glass tendency edge", default: 1, min: 0.6, max: 1.6, unit: "multiplier", primaryMetric: "orbRate" },
   { key: "decisions.threeUtilityScale", label: "three-point utility", default: 1, min: 0.7, max: 1.4, unit: "multiplier", primaryMetric: "threeAttemptRate" },
