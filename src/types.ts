@@ -151,6 +151,12 @@ export type Ball = {
   shotMeta: ShotMeta | null;
   from?: Player | null;
   passDur?: number;
+  catchPoint?: Point | null;
+  // in-flight pass heading (unit vector) + speed; the ball homes onto the live
+  // receiver each tick with a capped turn rate so the path stays near-straight
+  hx?: number;
+  hy?: number;
+  bspeed?: number;
 };
 
 export type Tactics = {

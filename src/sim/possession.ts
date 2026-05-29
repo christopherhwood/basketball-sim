@@ -165,13 +165,35 @@ export function tick(): void {
   if (G.ball.state === "pass") {
     G.ball.flight++;
     const f = clamp(G.ball.flight / (G.ball.passDur as number), 0, 1);
-    G.ball.x = lerp((G.ball.from as Player).x, (G.ball.target as Player).x, f);
-    G.ball.y = lerp((G.ball.from as Player).y, (G.ball.target as Player).y, f);
+    const r = G.ball.target as Player;
+    // Home the ball onto the LIVE (moving) receiver: rotate the heading toward
+    // the receiver by at most PASS_MAX_TURN rad/tick so the path stays nearly
+    // straight; in the final stretch allow a full turn so the ball lands exactly
+    // on the receiver — a clean in-stride catch with no jump. The receiver keeps
+    // their own motion (no override), so this is gameplay-neutral.
+    const PASS_MAX_TURN = 0.35;
+    const turnCap = f > 0.8 ? Math.PI : PASS_MAX_TURN;
+    const dxL = r.x - G.ball.x;
+    const dyL = r.y - G.ball.y;
+    const dL = Math.hypot(dxL, dyL) || 1;
+    const curA = Math.atan2(G.ball.hy as number, G.ball.hx as number);
+    let delta = Math.atan2(dyL / dL, dxL / dL) - curA;
+    if (delta > Math.PI) delta -= 2 * Math.PI;
+    if (delta < -Math.PI) delta += 2 * Math.PI;
+    delta = clamp(delta, -turnCap, turnCap);
+    const newA = curA + delta;
+    G.ball.hx = Math.cos(newA);
+    G.ball.hy = Math.sin(newA);
+    G.ball.x += (G.ball.hx as number) * (G.ball.bspeed as number) * DT;
+    G.ball.y += (G.ball.hy as number) * (G.ball.bspeed as number) * DT;
     if (f >= 1) {
-      const r = G.ball.target as Player;
       r.hasBall = true;
       G.ball.holder = r;
       G.ball.state = "held";
+      G.ball.catchPoint = null;
+      G.ball.hx = undefined;
+      G.ball.hy = undefined;
+      G.ball.bspeed = undefined;
       G.pendingAssist = G.ball.from;
       G.decideCD = 3;
     }
