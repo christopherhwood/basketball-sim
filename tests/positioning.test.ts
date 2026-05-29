@@ -29,6 +29,7 @@ import { toEnginePlayer } from "../src/data/playerData.js";
 import { HOOP } from "../src/core/constants.js";
 import { dist } from "../src/core/math.js";
 import type { Player, PlayerData, Tendencies, BaseAttributes, TeamSide, Pos } from "../src/types.js";
+import { breathe } from "./helpers.js";
 
 const POSITIONS: Pos[] = ["PG", "SG", "SF", "PF", "C"];
 
@@ -116,12 +117,13 @@ describe("off-ball spacing positions bigs inside", () => {
    * player's distance to the hoop along the attack axis over many seeded games and
    * assert the big's average is comfortably smaller than the shooter's.
    */
-  it("low-shootThree big averages closer to the hoop than a high-shootThree shooter", () => {
+  it("low-shootThree big averages closer to the hoop than a high-shootThree shooter", async () => {
     let bigDistSum = 0;
     let shooterDistSum = 0;
     let samples = 0;
 
     for (const seed of SEEDS) {
+      await breathe();
       newGame(seed, { home: makeRoster("home", homeTend), away: makeRoster("away", () => ({})) });
       G.homeAttack = "R";
       G.awayAttack = "L";
@@ -160,12 +162,13 @@ describe("off-ball spacing positions bigs inside", () => {
    * bug where the CPU offense bunches two bodies around the FT line during PNR
    * spacing and roll/fill reactions.
    */
-  it("keeps away off-ball targets from stacking around the free-throw line", () => {
+  it("keeps away off-ball targets from stacking around the free-throw line", async () => {
     let targetPairs = 0;
     let stackedTargets = 0;
     let stackedHighPostTargets = 0;
 
     for (const seed of SEEDS) {
+      await breathe();
       newGame(seed, {
         home: makeRoster("home", () => ({})),
         away: makeRoster("away", awayTwoBigTend),

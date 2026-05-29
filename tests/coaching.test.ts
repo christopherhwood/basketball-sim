@@ -31,6 +31,7 @@ import type {
   Pos,
   PlayerCoaching,
 } from "../src/types.js";
+import { breathe } from "./helpers.js";
 
 const POSITIONS: Pos[] = ["PG", "SG", "SF", "PF", "C"];
 
@@ -108,9 +109,10 @@ const sum = (team: Player[], key: keyof Player["stats"]): number =>
   team.reduce((acc, p) => acc + p.stats[key], 0);
 
 // Aggregate a HOME box-score stat across seeds for a given home coaching directive.
-function aggregateHome(seeds: number[], home: PlayerCoaching, key: keyof Player["stats"]): number {
+async function aggregateHome(seeds: number[], home: PlayerCoaching, key: keyof Player["stats"]): Promise<number> {
   let total = 0;
   for (const seed of seeds) {
+    await breathe();
     resetCoaching();
     coachHome(home);
     setup(seed);
@@ -124,10 +126,11 @@ function aggregateHome(seeds: number[], home: PlayerCoaching, key: keyof Player[
 // shotBias shifts the *mix* of shots toward/away from three more cleanly than it
 // moves raw 3PA volume (pace shifts when the rim tendency drops), so the share is
 // the robust signal that the team is leaning into threes.
-function aggregateHomeThreeShare(seeds: number[], home: PlayerCoaching): number {
+async function aggregateHomeThreeShare(seeds: number[], home: PlayerCoaching): Promise<number> {
   let tpa = 0;
   let fga = 0;
   for (const seed of seeds) {
+    await breathe();
     resetCoaching();
     coachHome(home);
     setup(seed);
@@ -139,9 +142,10 @@ function aggregateHomeThreeShare(seeds: number[], home: PlayerCoaching): number 
 }
 
 // Count passes the home team starts on offense across seeds for a directive.
-function aggregateHomePasses(seeds: number[], home: PlayerCoaching): number {
+async function aggregateHomePasses(seeds: number[], home: PlayerCoaching): Promise<number> {
   let passes = 0;
   for (const seed of seeds) {
+    await breathe();
     resetCoaching();
     coachHome(home);
     setup(seed);
@@ -171,36 +175,36 @@ describe("coaching directives drive home box-score behavior", () => {
    * as the three-point share of all field-goal attempts (3PA / FGA), which isolates
    * the shift in shot MIX from the pace changes that raw 3PA volume conflates.
    */
-  it('shotBias "three" attempts MORE threes than neutral (3PA share of FGA)', () => {
-    const threeShare = aggregateHomeThreeShare(SEEDS, withDirective({ shotBias: "three" }));
-    const neutralShare = aggregateHomeThreeShare(SEEDS, NEUTRAL_PLAYER_COACHING);
+  it('shotBias "three" attempts MORE threes than neutral (3PA share of FGA)', async () => {
+    const threeShare = await aggregateHomeThreeShare(SEEDS, withDirective({ shotBias: "three" }));
+    const neutralShare = await aggregateHomeThreeShare(SEEDS, NEUTRAL_PLAYER_COACHING);
     expect(threeShare).toBeGreaterThan(neutralShare * 1.02);
   });
 
   /*
    * shotFreedom "free" => the home team takes MORE field-goal attempts than "limited".
    */
-  it('shotFreedom "free" takes MORE field-goal attempts than "limited" (sum fga)', () => {
-    const freeFga = aggregateHome(SEEDS, withDirective({ shotFreedom: "free" }), "fga");
-    const limitedFga = aggregateHome(SEEDS, withDirective({ shotFreedom: "limited" }), "fga");
+  it('shotFreedom "free" takes MORE field-goal attempts than "limited" (sum fga)', async () => {
+    const freeFga = await aggregateHome(SEEDS, withDirective({ shotFreedom: "free" }), "fga");
+    const limitedFga = await aggregateHome(SEEDS, withDirective({ shotFreedom: "limited" }), "fga");
     expect(freeFga).toBeGreaterThan(limitedFga * 1.02);
   });
 
   /*
    * playmaking "facilitate" => the home team starts MORE passes than "score".
    */
-  it('playmaking "facilitate" starts MORE passes than "score"', () => {
-    const facilitate = aggregateHomePasses(SEEDS, withDirective({ playmaking: "facilitate" }));
-    const score = aggregateHomePasses(SEEDS, withDirective({ playmaking: "score" }));
+  it('playmaking "facilitate" starts MORE passes than "score"', async () => {
+    const facilitate = await aggregateHomePasses(SEEDS, withDirective({ playmaking: "facilitate" }));
+    const score = await aggregateHomePasses(SEEDS, withDirective({ playmaking: "score" }));
     expect(facilitate).toBeGreaterThan(score * 1.06);
   });
 
   /*
    * aggression "gamble" => the home team records MORE steals than "safe".
    */
-  it('aggression "gamble" records MORE steals than "safe" (sum stl)', () => {
-    const gamble = aggregateHome(SEEDS, withDirective({ aggression: "gamble" }), "stl");
-    const safe = aggregateHome(SEEDS, withDirective({ aggression: "safe" }), "stl");
+  it('aggression "gamble" records MORE steals than "safe" (sum stl)', async () => {
+    const gamble = await aggregateHome(SEEDS, withDirective({ aggression: "gamble" }), "stl");
+    const safe = await aggregateHome(SEEDS, withDirective({ aggression: "safe" }), "stl");
     expect(gamble).toBeGreaterThan(safe * 1.25);
   });
 });

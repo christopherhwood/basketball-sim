@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { seedRng } from "../src/core/rng.js";
 import { newGame, G, players } from "../src/core/state.js";
 import { tick } from "../src/sim/possession.js";
+import { breathe } from "./helpers.js";
 
 /*
  * REBOUND DISTRIBUTION GUARD.
@@ -27,10 +28,11 @@ function playToBuzzer(seed: number): void {
 }
 
 describe("rebounds spread realistically across positions", () => {
-  it("the center does not hoard, and guards get a real share", () => {
+  it("the center does not hoard, and guards get a real share", async () => {
     const byPos: Record<string, number> = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
     let total = 0;
     for (let s = 1; s <= 16; s++) {
+      await breathe();
       seedRng(s);
       playToBuzzer(s);
       for (const p of players()) {
