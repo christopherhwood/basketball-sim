@@ -5,6 +5,7 @@ import { G, offTeam, defTeam, hoop, logEv } from "../core/state.js";
 import { beginScoreTransition, beginLiveTransition } from "./transition.js";
 import { setupPossession } from "./possession.js";
 import { effectiveTendencies } from "./tendency.js";
+import { simTunables } from "./tunables.js";
 import { tacFor } from "../tactics/tactics.js";
 import type { Player, Point, ShotType } from "../types.js";
 
@@ -87,6 +88,7 @@ function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
 }
 
 export function attemptShot(sh: Player, type: ShotType, contest: number, pts: number, mp: number): void {
+  const tuning = simTunables();
   G.lastShooter = sh;
   G.lastAssist = G.pendingAssist;
   G.pendingAssist = null;
@@ -159,7 +161,8 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
         ? clamp((defTend.gambleSteal - 50) * FOUL_GAMBLE_SLOPE, 0, 0.06)
         : 0;
 
-      const base = isInside ? FOUL_BASE_INSIDE : FOUL_BASE_PERIM;
+      const foulScale = isInside ? tuning.fouls.insideScale : tuning.fouls.perimeterScale;
+      const base = (isInside ? FOUL_BASE_INSIDE : FOUL_BASE_PERIM) * foulScale;
       const cap = isInside ? FOUL_CAP_INSIDE : FOUL_CAP_PERIM;
       const fp = clamp(base + disciplineAdj + iqAdj + drawAdj + mismatchAdj + pressureAdj + gambleAdj, 0, cap);
 
@@ -260,6 +263,7 @@ function caromLandingSpot(sh: Player, h: Point): Point {
 }
 
 function missAndRebound(sh: Player): void {
+  const tuning = simTunables();
   const h = hoop(),
     off = offTeam(),
     def = defTeam();
@@ -291,12 +295,12 @@ function missAndRebound(sh: Player): void {
     const physMult = 1.0 + clamp((p.attr.height - 6.5) * 0.06 + p.attr.vertical * 0.003, -0.15, 0.30);
 
     // box-out: defenders get a small positional edge from boxing out
-    const boxoutMult = isDef ? REB_BOXOUT_DEF_BONUS : 1.0;
+    const boxoutMult = isDef ? REB_BOXOUT_DEF_BONUS * tuning.rebounding.defensiveBoxoutScale : 1.0;
 
     // crashGlass tendency bonus for offensive players
     const crashBonus =
       !isDef && p.team === G.offense
-        ? (effectiveTendencies(p).crashGlass / 100) * REB_CRASH_MAX_BONUS
+        ? (effectiveTendencies(p).crashGlass / 100) * REB_CRASH_MAX_BONUS * tuning.rebounding.crashGlassScale
         : 0;
 
     // weight term for body mass (position-holding)
@@ -325,6 +329,8 @@ function missAndRebound(sh: Player): void {
   if (!best) return;
 
   best.stats.reb++;
+  if (best.team === G.offense) best.stats.oreb++;
+  else best.stats.dreb++;
   logEv(`${best.name} grabs the rebound`);
   if (best.team === G.offense) {
     G.ball.state = "held";
@@ -442,4 +448,3 @@ export function updateFreeThrows(): void {
     }
   }
 }
-

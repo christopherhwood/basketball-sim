@@ -92,6 +92,8 @@ export type Stats = {
   tpm: number;
   rimFga: number;
   reb: number;
+  oreb: number;
+  dreb: number;
   ast: number;
   stl: number;
   blk: number;

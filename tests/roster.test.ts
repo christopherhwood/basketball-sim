@@ -221,7 +221,7 @@ describe("genPlayer: single-player determinism and structure", () => {
     resetNamePool();
     const p = genPlayer("rim_big", "home", 33);
     expect(p.stats).toEqual({
-      pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, ast: 0,
+      pts: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, rimFga: 0, reb: 0, oreb: 0, dreb: 0, ast: 0,
       stl: 0, blk: 0, tov: 0, fta: 0, ftm: 0,
     });
     expect(p.role).toBe("spacer");

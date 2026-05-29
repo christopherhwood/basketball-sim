@@ -9,6 +9,7 @@ import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
 import { beginFouled } from "./resolution.js";
+import { simTunables } from "./tunables.js";
 import type { Player, Point, Tactics } from "../types.js";
 
 /* Default ball-handling rating: the stronger hand. Force-direction (a later PR)
@@ -212,6 +213,7 @@ export function offenseDecide(): void {
     def = defTeam(),
     h = hoop(),
     tac = tacFor(G.offense);
+  const tuning = simTunables();
   // ----- run primary action so possessions have shape -----
   runAction(off, def, h, tac);
 
@@ -234,6 +236,7 @@ export function offenseDecide(): void {
         const iqEdge = (onBallDef.attr.iq - bh.attr.iq) * STRIP_IQ_SLOPE;
         let tovP =
           (ON_BALL_TOV_BASE + Math.max(0, stealEdge) + Math.max(0, iqEdge)) *
+          tuning.turnovers.onBallScale *
           STRIP_PRESSURE_MULT[tac.pressure] *
           tendencyFactor(effectiveTendencies(onBallDef).gambleSteal);
         if (G.driving) tovP *= STRIP_DRIVE_MULT;
@@ -287,7 +290,7 @@ export function offenseDecide(): void {
       // compressed tendency swing keeps the high/low ordering but narrows the
       // absolute spread, then THREE_UTILITY_MULT sets the overall volume.
       const tf = 1 + (tendencyFactor(shootTend) - 1) * THREE_TEND_COMPRESS;
-      shootU *= tf * THREE_UTILITY_MULT;
+      shootU *= tf * THREE_UTILITY_MULT * tuning.decisions.threeUtilityScale;
       // open-look floor: nudges MILDLY-reluctant but capable shooters to take the
       // open three. The reluctance weight is a band peaking around shootThree ~50
       // and fading to zero both at neutral-plus (high-volume teams already shoot
@@ -299,7 +302,7 @@ export function offenseDecide(): void {
       // (already shooting plenty — keeps pace-and-space teams under the ceiling).
       const t3 = bh.attr.three;
       const capable = clamp((t3 - 42) / 16, 0, 1) * clamp((78 - t3) / 16, 0, 1);
-      shootU += THREE_UTILITY_FLOOR * open * reluctance * capable;
+      shootU += THREE_UTILITY_FLOOR * tuning.decisions.threeUtilityScale * open * reluctance * capable;
     } else {
       shootU *= tendencyFactor(shootTend);
     }
@@ -349,7 +352,7 @@ export function offenseDecide(): void {
 
     if (tac.shotSel === "rim") driveU += 0.25;
     if (tac.shotSel === "three") driveU -= 0.2;
-    driveU *= tendencyFactor(tendencies.driveRim);
+    driveU *= tendencyFactor(tendencies.driveRim) * tuning.decisions.driveUtilityScale;
 
     // pass utility: find best teammate (more open / better look)
     // Also checks for drive-and-kick targets (open man after help commits)
@@ -390,7 +393,7 @@ export function offenseDecide(): void {
     }
     // ball-movement bias early in clock so it isn't iso every time
     const passBias = G.possClock < 6 ? 0.5 : 0.1;
-    let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass);
+    let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass) * tuning.decisions.passUtilityScale;
 
     // post-up utility: a post threat near the basket can back down a weaker
     // on-ball defender. The physical EDGE pits the handler's strength/mass/length
@@ -929,10 +932,11 @@ function startPass(from: Player, to: Player): void {
       if (dist(d, to) < BAD_PASS_RECV_RADIUS) recvPressure = BAD_PASS_RECV_PRESSURE;
     }
     const badP = clamp(
-      BAD_PASS_BASE +
+      (BAD_PASS_BASE +
         Math.max(0, (70 - from.attr.pass) * BAD_PASS_PASS_SLOPE) +
         recvPressure +
-        routeRisk * (BAD_PASS_ROUTE_BASE + Math.max(0, 70 - from.attr.pass) * BAD_PASS_ROUTE_PASS_SLOPE),
+        routeRisk * (BAD_PASS_ROUTE_BASE + Math.max(0, 70 - from.attr.pass) * BAD_PASS_ROUTE_PASS_SLOPE)) *
+        simTunables().turnovers.badPassScale,
       0,
       BAD_PASS_CAP,
     );
@@ -978,10 +982,11 @@ function startPass(from: Player, to: Player): void {
     if (ld < 2.0 && dist(d, from) > 4 && dist(d, to) > 4) {
       const sp =
         clamp(
-          LANE_STEAL_BASE +
+          (LANE_STEAL_BASE +
             (d.attr.steal - 70) * LANE_STEAL_STEAL_SLOPE -
             (from.attr.pass - 70) * LANE_STEAL_PASS_SLOPE +
-            routeRisk * LANE_STEAL_ROUTE_RISK,
+            routeRisk * LANE_STEAL_ROUTE_RISK) *
+            simTunables().turnovers.laneStealScale,
           0,
           LANE_STEAL_CAP,
         ) * tendencyFactor(effectiveTendencies(d).gambleSteal);

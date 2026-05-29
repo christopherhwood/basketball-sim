@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sim": "tsx scripts/sim.ts",
+    "calibrate": "tsx scripts/calibrate.ts",
     "doctor": "npx react-doctor@latest"
   },
   "dependencies": {

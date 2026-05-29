@@ -1,0 +1,23 @@
+{
+  "name": "NBA-like broad v1",
+  "version": 1,
+  "description": "Broad modern pro-style team ranges for calibration. Values are intentionally loose for v1 so they guide tuning without overfitting one season.",
+  "metrics": {
+    "pointsPerGame": { "min": 106, "max": 124, "weight": 1 },
+    "possessions": { "min": 96, "max": 104, "weight": 1 },
+    "ppp": { "min": 1.08, "max": 1.20, "weight": 1 },
+    "fgPct": { "min": 0.44, "max": 0.51, "weight": 1 },
+    "efgPct": { "min": 0.50, "max": 0.58, "weight": 1 },
+    "threeAttemptRate": { "min": 0.33, "max": 0.48, "weight": 0.9 },
+    "threePct": { "min": 0.33, "max": 0.39, "weight": 0.7 },
+    "ftRate": { "min": 0.18, "max": 0.30, "weight": 1 },
+    "tovPct": { "min": 0.10, "max": 0.16, "weight": 1 },
+    "stlPerGame": { "min": 6.0, "max": 10.0, "weight": 0.7 },
+    "blkPerGame": { "min": 3.5, "max": 6.5, "weight": 0.6 },
+    "orbRate": { "min": 0.20, "max": 0.32, "weight": 0.8 },
+    "rimAttemptRate": { "min": 0.30, "max": 0.48, "weight": 0.8 },
+    "astRate": { "min": 0.50, "max": 0.72, "weight": 0.7 },
+    "sideNetPtsPerGame": { "min": -3, "max": 3, "weight": 2 },
+    "sideWinPctDelta": { "min": -0.08, "max": 0.08, "weight": 2 }
+  }
+}
