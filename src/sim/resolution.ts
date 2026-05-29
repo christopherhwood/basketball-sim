@@ -9,6 +9,14 @@ import type { Player, Point, ShotType } from "../types.js";
 
 /* ---------- 6) RESOLUTION ---------- */
 
+// --- block tuning (moves BLK) ---
+// lowered ceiling + flatter slope so blocks land ~4-6/team/game after tuning.
+const BLOCK_BASE = 0.1; // floor block chance for any rim protector in the area
+const BLOCK_PIVOT = 50; // block-attr pivot; defenders above this add, below subtract
+const BLOCK_SLOPE = 1 / 720; // per (block-pivot) point; was 1/160
+const BLOCK_CONTEST_MULT = 0.06; // contest contribution; was 0.10
+const BLOCK_CAP = 0.13; // max block probability; was 0.28
+
 function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   let best: Player | null = null,
     bd = 1e9;
@@ -34,7 +42,11 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
       { attr: { block: 0 } },
     );
     if (prot.attr && prot.attr.block > 0) {
-      const bp = clamp((prot.attr.block - 60) / 160 + contest * 0.1, 0, 0.28);
+      const bp = clamp(
+        BLOCK_BASE + (prot.attr.block - BLOCK_PIVOT) * BLOCK_SLOPE + contest * BLOCK_CONTEST_MULT,
+        0,
+        BLOCK_CAP,
+      );
       if (chance(bp)) {
         sh.stats.fga++;
         if ((type as ShotType) === "three") sh.stats.tpa++;

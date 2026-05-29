@@ -56,10 +56,15 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
   passing-lane gambles, offensive-glass crashing, and transition pushes — so players behave
   individually. Team tactics remain additional biases. `postUp` is defined but not yet wired
   (no post-up mechanic). Behavioral tests assert each tendency moves the box score.
-- **PR 4 — coaching system.** Per-player and per-matchup directives + a coaching resolver,
-  with UI controls.
-- **PR 5 — defensive matchups & assignments.** Manual and auto matchups, doubles, target
-  player denial, per-matchup switching.
+- **PR 4a — balance pass (done).** Added on-ball + bad-pass turnovers/steals and lifted
+  passing-lane steals, trimmed blocks, and tempered three-point volume — tuned to realistic
+  ranges (TOV ~11–16, STL ~6–10, BLK ~4–6 per team/game) with a balance-floor guard test.
+  Re-baselined the golden digests.
+- **PR 4b — per-player coaching.** A `Coaching` data model (team + per-player directives) +
+  a resolver that maps coaching into effective tendencies, wired into offense/defense, with
+  UI controls. Neutral coaching reproduces current behavior.
+- **PR 5 — per-matchup defense.** Assignment overrides, double-teams, force-direction,
+  switch-all, and the matchup-grid UI (the new defensive mechanics).
 - **PR 6+ — depth.** Substitutions, fatigue and foul trouble, fuller transition game,
   badges/traits, set plays / playbooks.
 
