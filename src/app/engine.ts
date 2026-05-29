@@ -60,14 +60,14 @@ export function stopLoop(): void {
   }
 }
 
-export function play(): void {
+function play(): void {
   running = true;
   lastT = 0;
   acc = 0;
   notify();
 }
 
-export function pause(): void {
+function pause(): void {
   running = false;
   lastT = 0;
   acc = 0;

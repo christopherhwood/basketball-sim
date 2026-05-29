@@ -78,14 +78,15 @@ export function TacticsPanel(): React.JSX.Element {
       <label>{seg.label}</label>
       <div className="opts" data-set={seg.set}>
         {seg.opts.map((o) => (
-          <div
+          <button
+            type="button"
             key={o.v}
             className={active[seg.set] === o.v ? "opt on" : "opt"}
             data-v={o.v}
             onClick={() => choose(seg.set, o.v)}
           >
             {o.label}
-          </div>
+          </button>
         ))}
       </div>
     </div>

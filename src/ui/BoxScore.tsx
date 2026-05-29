@@ -24,7 +24,7 @@ export function BoxScore(): React.JSX.Element {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
       <div>
-        <div style={{ color: "var(--home)", fontSize: "11px", letterSpacing: ".1em", marginBottom: "4px" }}>
+        <div className="box-label" style={{ color: "var(--home)" }}>
           YOUR TEAM
         </div>
         <table className="home-tbl">
@@ -45,7 +45,7 @@ export function BoxScore(): React.JSX.Element {
         </table>
       </div>
       <div>
-        <div style={{ color: "var(--away)", fontSize: "11px", letterSpacing: ".1em", marginBottom: "4px" }}>
+        <div className="box-label" style={{ color: "var(--away)" }}>
           OPPONENT
         </div>
         <table className="away-tbl">

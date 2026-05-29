@@ -27,8 +27,8 @@ export function MatchupSelect(): React.JSX.Element {
     <div className="card">
       <h2>Matchup</h2>
       <div className="seg">
-        <label>home</label>
-        <select value={selection.home} onChange={(e) => applySide("home", e.target.value)}>
+        <label htmlFor="matchup-home">home</label>
+        <select id="matchup-home" value={selection.home} onChange={(e) => applySide("home", e.target.value)}>
           {teams.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
@@ -38,8 +38,8 @@ export function MatchupSelect(): React.JSX.Element {
         </select>
       </div>
       <div className="seg">
-        <label>away</label>
-        <select value={selection.away} onChange={(e) => applySide("away", e.target.value)}>
+        <label htmlFor="matchup-away">away</label>
+        <select id="matchup-away" value={selection.away} onChange={(e) => applySide("away", e.target.value)}>
           {teams.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}

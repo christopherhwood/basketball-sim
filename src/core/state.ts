@@ -36,7 +36,7 @@ export function newGame(seed?: number, rosters?: { home: Player[]; away: Player[
 export function players(): Player[] {
   return G.home.concat(G.away);
 }
-export function teamArr(t: TeamSide): Player[] {
+function teamArr(t: TeamSide): Player[] {
   return t === "home" ? G.home : G.away;
 }
 export function offTeam(): Player[] {
@@ -48,11 +48,9 @@ export function defTeam(): Player[] {
 export function hoop(): Point {
   return HOOP[G.attackHoop];
 }
-export function ownHoop(): Point {
-  return HOOP[G.attackHoop === "R" ? "L" : "R"];
-} // defense protects this when on D... not used heavily
 
+let feedSeq = 0;
 export function logEv(t: string, cls?: string): void {
-  G.feed.unshift({ t, cls });
+  G.feed.unshift({ id: feedSeq++, t, cls });
   if (G.feed.length > 60) G.feed.pop();
 }
