@@ -7,12 +7,12 @@ import type { GameState, Player, TeamSide, Point } from "../types.js";
 /* ---------- GAME STATE ---------- */
 export let G: GameState;
 
-export function newGame(seed?: number): void {
+export function newGame(seed?: number, rosters?: { home: Player[]; away: Player[] }): void {
   if (seed !== undefined) seedRng(seed);
   resetNamePool();
   G = {
-    home: genTeam("home"),
-    away: genTeam("away"),
+    home: rosters ? rosters.home : genTeam("home"),
+    away: rosters ? rosters.away : genTeam("away"),
     offense: "home", // which team has the ball
     attackHoop: "R", // home attacks R first
     ball: { x: HOOP.L.x, y: 25, state: "inbound", holder: null, target: null, flight: 0, shotMeta: null },

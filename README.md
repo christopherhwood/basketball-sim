@@ -52,8 +52,14 @@ src/
     render.ts         Canvas 2D court + players (presentation only)
   ui/
     ui.ts             scoreboard / box score / feed DOM updates
+  data/
+    playerData.ts     pure validate (ajv) + JSON-to-engine-player mapping
+    loadFromFs.ts     node roster loader (sim + tests)
+    leagueBrowser.ts  browser roster loader (Vite import.meta.glob)
 scripts/
   sim.ts              headless multi-game stat harness
+data/                 external roster JSON (teams/, optional free-agents.json, schema/)
+.claude/skills/       generate-roster skill (LLM roster authoring)
 tests/                Vitest spec + golden-vector suite
 ```
 
@@ -86,7 +92,24 @@ output whenever you change engine logic.
 npm run sim                  # 100 games, base seed 1
 npm run sim -- --games 500   # more games for tighter averages
 npm run sim -- --seed 42     # different base seed (games are seeded base+i)
+npm run sim -- --home harbor-city-wolves --away summit-valley-rampart  # fixed rosters
 ```
+
+## Player data
+
+Rosters can be authored as external JSON and dropped into `data/` — no code changes
+needed. The game auto-discovers `data/teams/*.json` (the first two teams are used as the
+matchup for now) and an optional `data/free-agents.json` (omit it entirely for college or
+high-school leagues). Files are validated against `data/schema/*.json` on load. If `data/`
+is empty, the game falls back to archetype generation, so it still runs out of the box.
+
+Player JSON carries identity, the 25–99 `attributes`, and 0–100 `tendencies` (which the
+per-player AI in a later PR will consume). See `data/README.md` for the format and
+attribute scale.
+
+A bundled Claude Code skill, **`generate-roster`** (`.claude/skills/generate-roster/`),
+teaches Claude to research public statistics and emit valid roster JSON — so realistic
+NBA/college teams can be generated and dropped straight in.
 
 ## Where this is going
 

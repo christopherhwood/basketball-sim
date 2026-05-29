@@ -1,0 +1,174 @@
+{
+  "players": [
+    {
+      "name": "Jaylen Marsh",
+      "number": 4,
+      "position": "PG",
+      "height": 6.1,
+      "attributes": {
+        "speed": 86,
+        "handle": 82,
+        "pass": 70,
+        "three": 64,
+        "mid": 62,
+        "finishing": 66,
+        "perimD": 64,
+        "steal": 68,
+        "iq": 66,
+        "strength": 50,
+        "vertical": 70,
+        "rebound": 40,
+        "interiorD": 44,
+        "block": 32
+      },
+      "tendencies": {
+        "shootThree": 44,
+        "shootMid": 34,
+        "driveRim": 58,
+        "pass": 60,
+        "postUp": 6,
+        "screen": 18,
+        "helpDefense": 46,
+        "gambleSteal": 58,
+        "crashGlass": 22,
+        "pushTransition": 76
+      }
+    },
+    {
+      "name": "Eli Sandberg",
+      "number": 20,
+      "position": "SG",
+      "height": 6.4,
+      "attributes": {
+        "speed": 72,
+        "handle": 66,
+        "pass": 56,
+        "three": 88,
+        "mid": 74,
+        "finishing": 60,
+        "perimD": 54,
+        "steal": 52,
+        "iq": 70,
+        "strength": 56,
+        "vertical": 62,
+        "rebound": 42,
+        "interiorD": 44,
+        "block": 36
+      },
+      "tendencies": {
+        "shootThree": 82,
+        "shootMid": 40,
+        "driveRim": 22,
+        "pass": 38,
+        "postUp": 4,
+        "screen": 22,
+        "helpDefense": 38,
+        "gambleSteal": 38,
+        "crashGlass": 20,
+        "pushTransition": 60
+      }
+    },
+    {
+      "name": "Damon Reyes",
+      "number": 30,
+      "position": "PF",
+      "height": 6.75,
+      "attributes": {
+        "speed": 64,
+        "handle": 50,
+        "pass": 52,
+        "three": 44,
+        "mid": 60,
+        "finishing": 76,
+        "perimD": 58,
+        "steal": 50,
+        "iq": 64,
+        "strength": 78,
+        "vertical": 72,
+        "rebound": 78,
+        "interiorD": 74,
+        "block": 64
+      },
+      "tendencies": {
+        "shootThree": 18,
+        "shootMid": 36,
+        "driveRim": 44,
+        "pass": 36,
+        "postUp": 46,
+        "screen": 64,
+        "helpDefense": 62,
+        "gambleSteal": 32,
+        "crashGlass": 74,
+        "pushTransition": 40
+      }
+    },
+    {
+      "name": "Kenji Watanabe",
+      "number": 8,
+      "position": "SF",
+      "height": 6.6,
+      "attributes": {
+        "speed": 76,
+        "handle": 62,
+        "pass": 58,
+        "three": 68,
+        "mid": 64,
+        "finishing": 70,
+        "perimD": 78,
+        "steal": 72,
+        "iq": 72,
+        "strength": 66,
+        "vertical": 72,
+        "rebound": 56,
+        "interiorD": 64,
+        "block": 54
+      },
+      "tendencies": {
+        "shootThree": 56,
+        "shootMid": 30,
+        "driveRim": 40,
+        "pass": 44,
+        "postUp": 12,
+        "screen": 26,
+        "helpDefense": 76,
+        "gambleSteal": 64,
+        "crashGlass": 40,
+        "pushTransition": 54
+      }
+    },
+    {
+      "name": "Big Tom Yarbrough",
+      "number": 54,
+      "position": "C",
+      "height": 6.92,
+      "attributes": {
+        "speed": 52,
+        "handle": 38,
+        "pass": 46,
+        "three": 30,
+        "mid": 48,
+        "finishing": 78,
+        "perimD": 48,
+        "steal": 42,
+        "iq": 62,
+        "strength": 82,
+        "vertical": 66,
+        "rebound": 80,
+        "interiorD": 78,
+        "block": 76
+      },
+      "tendencies": {
+        "shootThree": 4,
+        "shootMid": 16,
+        "driveRim": 38,
+        "pass": 30,
+        "postUp": 56,
+        "screen": 72,
+        "helpDefense": 70,
+        "gambleSteal": 24,
+        "crashGlass": 82,
+        "pushTransition": 28
+      }
+    }
+  ]
+}

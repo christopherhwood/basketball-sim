@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bball.local/schema/free-agents.schema.json",
+  "title": "FreeAgents",
+  "description": "A pool of free-agent players authored as external JSON data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["players"],
+  "properties": {
+    "players": {
+      "type": "array",
+      "minItems": 0,
+      "items": { "$ref": "./player.schema.json" },
+      "description": "Available free-agent players."
+    }
+  }
+}

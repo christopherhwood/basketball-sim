@@ -5,9 +5,10 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noImplicitAny": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node", "vite/client"]
   },
   "include": ["src", "tests"]
 }
