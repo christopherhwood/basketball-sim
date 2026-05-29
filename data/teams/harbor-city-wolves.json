@@ -24,7 +24,9 @@
         "vertical": 70,
         "rebound": 42,
         "interiorD": 45,
-        "block": 35
+        "block": 35,
+        "drawFoul": 64,
+        "discipline": 82
       },
       "tendencies": {
         "shootThree": 60,
@@ -60,7 +62,9 @@
         "vertical": 72,
         "rebound": 44,
         "interiorD": 42,
-        "block": 36
+        "block": 36,
+        "drawFoul": 70,
+        "discipline": 76
       },
       "tendencies": {
         "shootThree": 85,
@@ -96,7 +100,9 @@
         "vertical": 80,
         "rebound": 62,
         "interiorD": 68,
-        "block": 60
+        "block": 60,
+        "drawFoul": 62,
+        "discipline": 68
       },
       "tendencies": {
         "shootThree": 70,
@@ -132,7 +138,9 @@
         "vertical": 72,
         "rebound": 76,
         "interiorD": 70,
-        "block": 66
+        "block": 66,
+        "drawFoul": 72,
+        "discipline": 74
       },
       "tendencies": {
         "shootThree": 72,
@@ -168,7 +176,9 @@
         "vertical": 88,
         "rebound": 88,
         "interiorD": 86,
-        "block": 85
+        "block": 85,
+        "drawFoul": 84,
+        "discipline": 58
       },
       "tendencies": {
         "shootThree": 4,
@@ -204,7 +214,9 @@
         "vertical": 86,
         "rebound": 56,
         "interiorD": 60,
-        "block": 54
+        "block": 54,
+        "drawFoul": 82,
+        "discipline": 56
       },
       "tendencies": {
         "shootThree": 42,
@@ -240,7 +252,9 @@
         "vertical": 66,
         "rebound": 40,
         "interiorD": 44,
-        "block": 32
+        "block": 32,
+        "drawFoul": 58,
+        "discipline": 78
       },
       "tendencies": {
         "shootThree": 58,
@@ -276,7 +290,9 @@
         "vertical": 70,
         "rebound": 84,
         "interiorD": 82,
-        "block": 80
+        "block": 80,
+        "drawFoul": 78,
+        "discipline": 55
       },
       "tendencies": {
         "shootThree": 10,

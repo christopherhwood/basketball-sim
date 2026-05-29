@@ -52,6 +52,8 @@ function baseAttributes(over: Partial<BaseAttributes> = {}): BaseAttributes {
     rebound: 75,
     interiorD: 75,
     block: 75,
+    drawFoul: 62,
+    discipline: 70,
     ...over,
   };
 }

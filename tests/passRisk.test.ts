@@ -26,6 +26,8 @@ function playerAt(pt: Point, pass: number, iq: number): Player {
       rebound: 70,
       interiorD: 70,
       block: 70,
+      drawFoul: 62,
+      discipline: 70,
       height: 6.4,
       tendShoot: 0.5,
     },

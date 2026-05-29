@@ -56,6 +56,8 @@ const ATTR_DEFAULTS: Attributes = {
   rebound: 55,
   interiorD: 55,
   block: 55,
+  drawFoul: 62,
+  discipline: 70,
   height: 55,
   tendShoot: 0.5,
 };

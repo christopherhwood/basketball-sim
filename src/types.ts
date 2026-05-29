@@ -22,6 +22,8 @@ export type BaseAttributes = {
   rebound: number;
   interiorD: number;
   block: number;
+  drawFoul: number;
+  discipline: number;
 };
 
 export type Attributes = BaseAttributes & {

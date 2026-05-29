@@ -73,7 +73,7 @@ function report(label: string, a: Agg): string[] {
       `PTS ${per(a.pts, g).padStart(5)}  ` +
       `FG ${per(a.fgm, g)}/${per(a.fga, g)} ${pct(a.fgm, a.fga).padStart(6)}  ` +
       `3P ${per(a.tpm, g)}/${per(a.tpa, g)} ${pct(a.tpm, a.tpa).padStart(6)}  ` +
-      `FT ${pct(a.ftm, a.fta).padStart(6)}`,
+      `FT ${per(a.ftm, g)}/${per(a.fta, g)} ${pct(a.ftm, a.fta).padStart(6)}`,
     "".padEnd(10) +
       `REB ${per(a.reb, g)}  AST ${per(a.ast, g)}  STL ${per(a.stl, g)}  ` +
       `TOV ${per(a.tov, g)}  BLK ${per(a.blk, g)}  ` +

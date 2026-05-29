@@ -30,7 +30,7 @@ Key constraints to respect (the schema rejects anything else):
 - `position` is one of `PG`, `SG`, `SF`, `PF`, `C`.
 - `height` is in **feet** (e.g. `6.75` for 6'9"), range 5.5..7.6.
 - `number` is an integer 0..99.
-- Author the `attributes` object with the **16 ratings only** — do NOT put
+- Author the `attributes` object with the **18 ratings only** — do NOT put
   `height` or `tendShoot` inside `attributes`. The loader supplies `attr.height`
   from the top-level `height` and computes `tendShoot` from the shoot tendencies.
 - Ball-handling is split into `handleLeft` and `handleRight` (handedness). The
@@ -42,6 +42,14 @@ Key constraints to respect (the schema rejects anything else):
 - `weight` is in **pounds** (~150-330), not a 25..99 rating. It matters for
   physical play: rebounding (heavier players hold position) and post-ups. Use
   realistic weights by position.
+- `drawFoul` (25..99) — how skillfully the player draws shooting fouls. Slashers
+  and post players who attack the rim hard should be high (75-90); spot-up
+  shooters and defensive specialists are mid-range (55-70); pure role players who
+  never seek contact are lower (40-55).
+- `discipline` (25..99) — how rarely the player commits fouls. Veterans and
+  cerebral defenders are high (75-88); aggressive, gamble-heavy defenders and
+  young rim-protectors are lower (50-65). Low discipline means more personal
+  fouls, which the engine models directly.
 
 ## 2. Rating and tendency scales
 
@@ -108,6 +116,15 @@ Use these as starting points, then sanity-check for internal consistency:
   - ORB rate and motor → `crashGlass`.
   - Help/anchor reputation, DRTG, block rate → `helpDefense`.
   - Steal-gambling, deflections, foul-prone aggressive D → `gambleSteal`.
+- **Foul drawing → `drawFoul`**
+  - FTA per game and FTA/FGA rate → `drawFoul`. High FTA rate (e.g. 8+ FTA/g)
+    → 85+; moderate (4-7 FTA/g) → 65-80; low (1-3 FTA/g) → 40-62.
+  - Slashers, post players, and anyone who lives at the free-throw line should be
+    high. Stationary shooters and defensive specialists are mid-range.
+- **Fouling tendency → `discipline`**
+  - PF per game: ~1 PF → 80+; ~2 PF → 70-78; ~3 PF → 58-68; ~4+ PF → 40-55.
+  - Also scale by age and experience: veteran players trend higher; young
+    aggressive defenders and shot-blockers trend lower.
 - **Team pace → `pushTransition`**
   - Faster team / high transition frequency → higher `pushTransition` across the
     roster; deliberate half-court teams lower it.
@@ -173,7 +190,7 @@ traceable and re-derivable. A short list at the end is enough.
         "speed": 82, "handleRight": 85, "handleLeft": 67, "pass": 84, "three": 78,
         "mid": 72, "finishing": 70, "perimD": 68, "steal": 72, "iq": 80,
         "strength": 55, "weight": 190, "vertical": 65, "rebound": 45,
-        "interiorD": 45, "block": 35
+        "interiorD": 45, "block": 35, "drawFoul": 64, "discipline": 78
       },
       "tendencies": {
         "shootThree": 55, "shootMid": 35, "driveRim": 60, "pass": 80,
@@ -190,7 +207,7 @@ traceable and re-derivable. A short list at the end is enough.
         "speed": 76, "handleRight": 70, "handleLeft": 52, "pass": 60, "three": 88,
         "mid": 75, "finishing": 68, "perimD": 70, "steal": 66, "iq": 70,
         "strength": 60, "weight": 205, "vertical": 70, "rebound": 48,
-        "interiorD": 48, "block": 40
+        "interiorD": 48, "block": 40, "drawFoul": 68, "discipline": 74
       },
       "tendencies": {
         "shootThree": 75, "shootMid": 45, "driveRim": 40, "pass": 45,
@@ -207,7 +224,7 @@ traceable and re-derivable. A short list at the end is enough.
         "speed": 74, "handleRight": 68, "handleLeft": 50, "pass": 66, "three": 74,
         "mid": 70, "finishing": 78, "perimD": 78, "steal": 68, "iq": 72,
         "strength": 70, "weight": 225, "vertical": 78, "rebound": 62,
-        "interiorD": 62, "block": 55
+        "interiorD": 62, "block": 55, "drawFoul": 62, "discipline": 68
       },
       "tendencies": {
         "shootThree": 50, "shootMid": 35, "driveRim": 55, "pass": 50,
@@ -224,7 +241,7 @@ traceable and re-derivable. A short list at the end is enough.
         "speed": 62, "handleRight": 55, "handleLeft": 38, "pass": 58, "three": 60,
         "mid": 62, "finishing": 80, "perimD": 62, "steal": 55, "iq": 68,
         "strength": 82, "weight": 250, "vertical": 75, "rebound": 80,
-        "interiorD": 78, "block": 70
+        "interiorD": 78, "block": 70, "drawFoul": 72, "discipline": 68
       },
       "tendencies": {
         "shootThree": 30, "shootMid": 35, "driveRim": 45, "pass": 40,
@@ -241,7 +258,7 @@ traceable and re-derivable. A short list at the end is enough.
         "speed": 52, "handleRight": 45, "handleLeft": 30, "pass": 52, "three": 32,
         "mid": 50, "finishing": 84, "perimD": 50, "steal": 48, "iq": 66,
         "strength": 88, "weight": 285, "vertical": 74, "rebound": 88,
-        "interiorD": 86, "block": 84
+        "interiorD": 86, "block": 84, "drawFoul": 80, "discipline": 62
       },
       "tendencies": {
         "shootThree": 5, "shootMid": 20, "driveRim": 40, "pass": 35,

@@ -53,6 +53,8 @@ function baseAttributes(over: Partial<BaseAttributes> = {}): BaseAttributes {
     rebound: 75,
     interiorD: 75,
     block: 75,
+    drawFoul: 62,
+    discipline: 70,
     ...over,
   };
 }
@@ -135,7 +137,7 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
     // the high-drive team generates at least 1.8× the rim+close FGA of the
     // drive-suppressed team; observed ratio is ~2.6×
     expect(highRimFga).toBeGreaterThan(lowRimFga * 1.8);
-  }, 60000);
+  });
 
   /*
    * MATCHUP: a quick handler (speed=95, handle=90) attacking a slow, weak
@@ -168,7 +170,7 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
     }
 
     expect(quickRimFga).toBeGreaterThan(slowRimFga * 2.5);
-  }, 60000);
+  });
 
   /*
    * POST: a physically dominant big (strength=90, weight=280) with high postUp
@@ -199,5 +201,5 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
     }
 
     expect(highRimFga).toBeGreaterThan(lowRimFga * 1.3);
-  }, 60000);
+  });
 });

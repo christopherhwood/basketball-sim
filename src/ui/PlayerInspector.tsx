@@ -21,6 +21,8 @@ const ATTR_ROWS: { key: keyof Player["attr"]; label: string }[] = [
   { key: "rebound", label: "Rebound" },
   { key: "interiorD", label: "Interior D" },
   { key: "block", label: "Block" },
+  { key: "drawFoul", label: "Draw Foul" },
+  { key: "discipline", label: "Discipline" },
 ];
 
 const TEND_ROWS: { key: keyof ReturnType<typeof tendenciesOf>; label: string }[] = [

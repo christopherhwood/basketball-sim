@@ -48,7 +48,9 @@
         "vertical",
         "rebound",
         "interiorD",
-        "block"
+        "block",
+        "drawFoul",
+        "discipline"
       ],
       "properties": {
         "speed": { "type": "integer", "minimum": 25, "maximum": 99 },
@@ -66,7 +68,9 @@
         "vertical": { "type": "integer", "minimum": 25, "maximum": 99 },
         "rebound": { "type": "integer", "minimum": 25, "maximum": 99 },
         "interiorD": { "type": "integer", "minimum": 25, "maximum": 99 },
-        "block": { "type": "integer", "minimum": 25, "maximum": 99 }
+        "block": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "drawFoul": { "type": "integer", "minimum": 25, "maximum": 99 },
+        "discipline": { "type": "integer", "minimum": 25, "maximum": 99 }
       }
     },
     "tendencies": {
