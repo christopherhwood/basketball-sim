@@ -23,7 +23,7 @@ Then branch, commit, push, and open a PR against `main`. CI runs typecheck + tes
 - **The simulation engine is pure and deterministic.** Everything under `src/core`, `src/sim`, `src/data`, `src/tactics` avoids the DOM and routes all randomness through the seeded generator in `src/core/rng.ts` (no raw `Math.random()`). `newGame(seed)` reproduces a game exactly. Please keep it that way — it's what makes the tests a reliable spec.
 - **Some tests are golden digests.** If you intentionally change how the game plays, a couple of golden values (e.g. in `tests/game.test.ts`) will change — that's expected. Re-run `npm test`, update the golden numbers to the new deterministic output, and keep the invariant assertions intact. If a *behavioral* test breaks, the engine probably regressed.
 - **`npm run sim`** prints aggregate box-score stats over many games — use it to confirm your change keeps the numbers realistic (turnovers, FG%, etc.).
-- **Adding players/teams?** Drop JSON into `data/teams/` (schema in `data/schema/`). The bundled **`generate-roster`** Claude Code skill can turn public stats into valid roster JSON — see `data/README.md`.
+- **Adding players/teams?** Keep roster JSON hosted separately from the game. You're welcome to generate your own players and teams (schema in `data/schema/`), but contributed rosters won't be bundled with the game.
 - **Style:** TypeScript, strict mode, relative imports use `.js` extensions. Match the surrounding code; small, focused PRs are easiest to review.
 
 ## Where things are
