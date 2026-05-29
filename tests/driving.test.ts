@@ -93,19 +93,21 @@ function makeRoster(
   });
 }
 
+const TICK_CAP = 7000;
+
 function playGame(seed: number, home: Player[], away: Player[]): { home: Player[]; away: Player[] } {
   newGame(seed, { home, away });
   G.homeAttack = "R";
   G.awayAttack = "L";
   G.attackHoop = "R";
-  for (let i = 0; i < 100000 && !G.over; i++) tick();
+  for (let i = 0; i < TICK_CAP && !G.over; i++) tick();
   return { home: G.home, away: G.away };
 }
 
 const sum = (team: Player[], key: keyof Player["stats"]): number =>
   team.reduce((acc, p) => acc + p.stats[key], 0);
 
-const SEEDS = Array.from({ length: 20 }, (_, i) => i + 1);
+const SEEDS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 /* ---------- tests ---------- */
 

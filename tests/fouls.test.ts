@@ -88,12 +88,18 @@ function makeRoster(side: TeamSide, attr: Partial<BaseAttributes> = {}, tend: Pa
   });
 }
 
+// Full-length games: the gambleSteal foul edge is small per-possession and only
+// separates from noise over a whole game (it passes at full length, fails when
+// truncated). The other foul specs here are robust regardless. Tracked task #15
+// will strengthen the gamble/pressure foul effect so this can be shortened.
+const TICK_CAP = 100000;
+
 function playGame(seed: number, home: Player[], away: Player[]): void {
   newGame(seed, { home, away });
   G.homeAttack = "R";
   G.awayAttack = "L";
   G.attackHoop = "R";
-  for (let i = 0; i < 100000 && !G.over; i++) tick();
+  for (let i = 0; i < TICK_CAP && !G.over; i++) tick();
 }
 
 const sumStat = (team: Player[], key: keyof Player["stats"]): number =>

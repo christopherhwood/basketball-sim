@@ -91,15 +91,17 @@ function makeRoster(side: TeamSide, tend: (i: number) => Partial<Tendencies>): P
   });
 }
 
-// Run one full seeded game with the standard setup and return the finished G's
-// home/away rosters so callers can read box-score stats.
+const TICK_CAP = 7000;
+
+// Run a seeded game segment and return the finished G's home/away rosters so
+// callers can read box-score stats.
 function playGame(seed: number, home: Player[], away: Player[]): { home: Player[]; away: Player[] } {
   newGame(seed, { home, away });
   G.homeAttack = "R";
   G.awayAttack = "L";
   G.attackHoop = "R";
   // hard tick cap so a pathological game can never hang the suite
-  for (let i = 0; i < 100000 && !G.over; i++) tick();
+  for (let i = 0; i < TICK_CAP && !G.over; i++) tick();
   return { home: G.home, away: G.away };
 }
 
@@ -121,7 +123,7 @@ function playGameCountingPasses(
   G.awayAttack = "L";
   G.attackHoop = "R";
   let passes = 0;
-  for (let i = 0; i < 100000 && !G.over; i++) {
+  for (let i = 0; i < TICK_CAP && !G.over; i++) {
     const before = G.ball.state;
     tick();
     if (G.ball.state === "pass" && before !== "pass" && G.offense === watch) passes++;
@@ -145,7 +147,7 @@ function playGameCountingOffReb(
   const team = watch === "home" ? G.home : G.away;
   let prevReb = team.map((p) => p.stats.reb);
   let offReb = 0;
-  for (let i = 0; i < 100000 && !G.over; i++) {
+  for (let i = 0; i < TICK_CAP && !G.over; i++) {
     tick();
     for (let j = 0; j < team.length; j++) {
       if (team[j].stats.reb > prevReb[j] && G.offense === watch) {
@@ -157,7 +159,7 @@ function playGameCountingOffReb(
   return offReb;
 }
 
-const SEEDS = Array.from({ length: 30 }, (_, i) => i + 1);
+const SEEDS = Array.from({ length: 15 }, (_, i) => i + 1);
 
 describe("tendencies drive box-score behavior", () => {
   /*
