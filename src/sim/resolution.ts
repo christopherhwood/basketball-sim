@@ -5,9 +5,29 @@ import { G, offTeam, defTeam, hoop, logEv } from "../core/state.js";
 import { beginScoreTransition, beginLiveTransition } from "./transition.js";
 import { setupPossession } from "./possession.js";
 import { effectiveTendencies } from "./tendency.js";
+import { tacFor } from "../tactics/tactics.js";
 import type { Player, Point, ShotType } from "../types.js";
 
 /* ---------- 6) RESOLUTION ---------- */
+
+// --- shooting foul tuning ---
+// Inside (rim/close): base rate, then scaled by defender discipline/iq, size
+// mismatch, shooter drawFoul, and team pressure/gamble.  Perimeter closeouts
+// get a smaller base.  Target: ~18-26 FTA per team per game, FT/FGA ~0.18-0.26.
+const FOUL_BASE_INSIDE = 0.42; // base probability for a contested inside shot
+const FOUL_BASE_PERIM = 0.15; // base for a contested perimeter (mid/three) closeout
+const FOUL_CONTEST_THRESH_INSIDE = 0.16; // min contest level to trigger inside check
+const FOUL_CONTEST_THRESH_PERIM = 0.34; // tighter threshold for perimeter fouls
+const FOUL_RATING_PIVOT = 62; // pivot for discipline/drawFoul (league average)
+const FOUL_DISCIPLINE_SLOPE = 0.003; // per point below pivot -> +foul%; above -> -foul%
+const FOUL_IQ_SLOPE = 0.002; // low defender IQ adds foul risk
+const FOUL_DRAW_SLOPE = 0.0025; // per point above pivot for shooter drawFoul
+const FOUL_MISMATCH_MAX = 0.08; // max added probability from size mismatch
+const FOUL_HEIGHT_MISMATCH_THRESH = 0.3; // feet difference that triggers mismatch
+const FOUL_TIGHT_BONUS = 0.06; // bonus when defending team plays tight pressure
+const FOUL_GAMBLE_SLOPE = 0.0015; // per point above 50 gambleSteal tendency
+const FOUL_CAP_INSIDE = 0.58; // absolute ceiling for inside foul probability
+const FOUL_CAP_PERIM = 0.28; // ceiling for perimeter foul probability
 
 // --- block tuning (moves BLK) ---
 // lowered ceiling + flatter slope so blocks land ~4-6/team/game after tuning.
@@ -94,10 +114,60 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
       }
     }
   }
-  // shooting foul on contested drives/layups -> trip to the line (handled visibly)
-  if ((type === "rim" || type === "close") && contest > 0.4 && chance(0.16)) {
-    beginFouled(sh, type, pts, chance(mp));
-    return; // 2nd arg true = and-one (shot would have fallen)
+  // shooting foul check — contested inside shots and perimeter closeouts
+  {
+    const isInside = type === "rim" || type === "close";
+    const contestThresh = isInside ? FOUL_CONTEST_THRESH_INSIDE : FOUL_CONTEST_THRESH_PERIM;
+    if (contest > contestThresh) {
+      const nearDef = nearestDef(sh, def);
+      const defPlayer = nearDef.d;
+      const defTac = tacFor(defPlayer?.team ?? (sh.team === "home" ? "away" : "home"));
+      const defTend = defPlayer ? effectiveTendencies(defPlayer) : null;
+
+      // defender discipline and IQ — lower values foul more
+      const disciplineAdj = defPlayer
+        ? (FOUL_RATING_PIVOT - defPlayer.attr.discipline) * FOUL_DISCIPLINE_SLOPE
+        : 0;
+      const iqAdj = defPlayer ? (FOUL_RATING_PIVOT - defPlayer.attr.iq) * FOUL_IQ_SLOPE : 0;
+
+      // shooter draw-foul skill — above pivot draws more fouls
+      const drawAdj = (sh.attr.drawFoul - FOUL_RATING_PIVOT) * FOUL_DRAW_SLOPE;
+
+      // size mismatch: small defender at the rim or slow big chasing a perimeter shooter
+      let mismatchAdj = 0;
+      if (defPlayer) {
+        if (isInside && defPlayer.attr.height < sh.attr.height - FOUL_HEIGHT_MISMATCH_THRESH) {
+          // undersized defender contesting inside — jumps into shooter
+          mismatchAdj = clamp(
+            (sh.attr.height - defPlayer.attr.height - FOUL_HEIGHT_MISMATCH_THRESH) * 0.18,
+            0,
+            FOUL_MISMATCH_MAX,
+          );
+        } else if (!isInside && defPlayer.attr.height > sh.attr.height + FOUL_HEIGHT_MISMATCH_THRESH) {
+          // big slow defender closing out on a perimeter shooter
+          mismatchAdj = clamp(
+            (defPlayer.attr.height - sh.attr.height - FOUL_HEIGHT_MISMATCH_THRESH) * 0.12,
+            0,
+            FOUL_MISMATCH_MAX,
+          );
+        }
+      }
+
+      // tight pressure and gamble-steal tendency — both increase foul frequency
+      const pressureAdj = defTac.pressure === "tight" ? FOUL_TIGHT_BONUS : 0;
+      const gambleAdj = defTend
+        ? clamp((defTend.gambleSteal - 50) * FOUL_GAMBLE_SLOPE, 0, 0.06)
+        : 0;
+
+      const base = isInside ? FOUL_BASE_INSIDE : FOUL_BASE_PERIM;
+      const cap = isInside ? FOUL_CAP_INSIDE : FOUL_CAP_PERIM;
+      const fp = clamp(base + disciplineAdj + iqAdj + drawAdj + mismatchAdj + pressureAdj + gambleAdj, 0, cap);
+
+      if (chance(fp)) {
+        beginFouled(sh, type, pts, chance(mp));
+        return;
+      }
+    }
   }
   // normal field-goal attempt
   sh.stats.fga++;

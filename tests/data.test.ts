@@ -40,6 +40,8 @@ const ATTR_KEYS = [
   "rebound",
   "interiorD",
   "block",
+  "drawFoul",
+  "discipline",
 ] as const;
 
 const TEND_KEYS = [
@@ -73,6 +75,8 @@ function makeAttributes(): PlayerData["attributes"] {
     rebound: 80,
     interiorD: 80,
     block: 80,
+    drawFoul: 62,
+    discipline: 70,
   };
 }
 
@@ -253,6 +257,6 @@ describe("free agents optional", () => {
 
 // GOLDEN — discovered by running the loaded-roster game (seed 7, 3000 ticks).
 const GOLDEN = {
-  homeScore: 5,
-  awayScore: 3,
+  homeScore: 15,
+  awayScore: 10,
 };

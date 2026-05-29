@@ -52,13 +52,14 @@ Every player in a team file (and in `free-agents.json`) is the same shape, defin
 - **`position`** — one of `PG`, `SG`, `SF`, `PF`, `C`.
 - **`height`** — in feet, as a decimal. A 6-foot-9 player is `6.75`; a 7-footer is `7.0`.
   Use realistic heights for the position.
-- **`attributes`** — the 16 ratings below.
+- **`attributes`** — the 18 ratings below.
 - **`tendencies`** — the 10 tendencies below.
 
-### Attributes (the 16 ratings)
+### Attributes (the 18 ratings)
 
 `speed`, `handleLeft`, `handleRight`, `pass`, `three`, `mid`, `finishing`, `perimD`,
-`steal`, `iq`, `strength`, `weight`, `vertical`, `rebound`, `interiorD`, `block`.
+`steal`, `iq`, `strength`, `weight`, `vertical`, `rebound`, `interiorD`, `block`,
+`drawFoul`, `discipline`.
 
 Every attribute except `weight` is an integer on this scale:
 
@@ -73,6 +74,15 @@ Every attribute except `weight` is an integer on this scale:
 Make the ratings fit the player. A rim-running center should be high on `finishing`,
 `rebound`, `interiorD`, `block`, and `strength`, and low on `three` and ball-handling. A
 sharpshooter should be high on `three` (and on the `shootThree` tendency below).
+
+**`drawFoul`** — skill at drawing shooting fouls (25..99). Slashers, post scorers, and
+anyone who attacks contact should be high (75-90). Spot-up shooters and pure role players
+are mid-range (55-70). Affects foul probability directly in the engine.
+
+**`discipline`** — how rarely the player commits fouls (25..99). Veterans and cerebral
+defenders are high (75-88). Young aggressive defenders, shot-blockers, and gamble-heavy
+players are lower (50-65). Lower discipline increases the engine's foul rate when that
+player defends.
 
 **`handleLeft` / `handleRight`** — handedness. Each is the player's ball-handling skill
 with that hand (25..99). The **higher of the two is the strong hand**; the other is the

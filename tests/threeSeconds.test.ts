@@ -27,6 +27,8 @@ function baseAttributes(): BaseAttributes {
     rebound: 75,
     interiorD: 75,
     block: 75,
+    drawFoul: 62,
+    discipline: 70,
   };
 }
 
