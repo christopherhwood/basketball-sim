@@ -140,7 +140,7 @@ describe("physical post play and rebounding drive box-score behavior", () => {
     // gets to the line far more often (the post-up branch routes foul draws to FTs).
     expect(strongPts).toBeGreaterThan(weakPts * 1.5);
     expect(strongFta).toBeGreaterThan(weakFta * 3);
-  }, 30000);
+  });
 
   /*
    * PHYSIQUE: weight.  DIRECTION: heavier players hold rebounding position, so a
@@ -163,5 +163,5 @@ describe("physical post play and rebounding drive box-score behavior", () => {
     // the rebounding mass term is bounded (it nudges boards without overpowering
     // skill/height/box-out), so the edge is modest but consistently positive.
     expect(heavyReb).toBeGreaterThan(lightReb);
-  }, 30000);
+  });
 });

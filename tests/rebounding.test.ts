@@ -44,5 +44,5 @@ describe("rebounds spread realistically across positions", () => {
     expect(share("C")).toBeGreaterThan(0.2); // still the leading rebounder
     // guards used to get ~1-2%; should now get a real combined share
     expect(share("PG") + share("SG")).toBeGreaterThan(0.08);
-  }, 30000);
+  });
 });

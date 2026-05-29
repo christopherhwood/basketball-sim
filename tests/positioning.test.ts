@@ -152,7 +152,7 @@ describe("off-ball spacing positions bigs inside", () => {
     // so a 1.3x margin leaves plenty of headroom against per-game noise.
     expect(bigAvg).toBeLessThan(shooterAvg);
     expect(shooterAvg).toBeGreaterThan(bigAvg);
-  }, 30000);
+  });
 
   /*
    * REGRESSION: the target assignment layer must not let two away players reserve
@@ -199,5 +199,5 @@ describe("off-ball spacing positions bigs inside", () => {
     expect(targetPairs).toBeGreaterThan(500);
     expect(stackedTargets).toBeLessThan(targetPairs * 0.01);
     expect(stackedHighPostTargets).toBe(0);
-  }, 30000);
+  });
 });
