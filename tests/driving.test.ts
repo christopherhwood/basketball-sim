@@ -26,6 +26,7 @@
 
 import { describe, it, expect } from "vitest";
 import { newGame, G } from "../src/core/state.js";
+import { breathe } from "./helpers.js";
 import { tick } from "../src/sim/possession.js";
 import { toEnginePlayer } from "../src/data/playerData.js";
 import type { Player, PlayerData, Tendencies, BaseAttributes, TeamSide, Pos } from "../src/types.js";
@@ -114,10 +115,11 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
    * Compared against driveRim=5 (suppressed) to show the floor is above the
    * suppressed baseline.
    */
-  it("rim+close FGA make up a meaningful share of attempts and clearly exceed a drive-suppressed baseline", () => {
+  it("rim+close FGA make up a meaningful share of attempts and clearly exceed a drive-suppressed baseline", async () => {
     let highRimFga = 0, highFga = 0;
     let lowRimFga = 0, lowFga = 0;
     for (const seed of SEEDS) {
+      await breathe();
       const high = playGame(seed, makeRoster("home", {}, { driveRim: 80 }), makeRoster("away"));
       highRimFga += sum(high.home, "rimFga");
       highFga += sum(high.home, "fga");
@@ -144,11 +146,12 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
    * Observed: quick=242 rimFga, slow=53 rimFga over 20 seeds.
    * Margin: quick > slow * 2.5 (well below the 4.5× observed).
    */
-  it("a quick guard with a handle edge drives more than a slow handler vs the same defense", () => {
+  it("a quick guard with a handle edge drives more than a slow handler vs the same defense", async () => {
     let quickRimFga = 0;
     let slowRimFga = 0;
     const awayAttr = { speed: 60, perimD: 60 };
     for (const seed of SEEDS) {
+      await breathe();
       const quick = playGame(
         seed,
         makeRoster("home", { speed: 95, handleLeft: 90, handleRight: 90 }),
@@ -175,10 +178,11 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
    * Observed: highPost=749 rimFga, lowPost=470 rimFga over 20 seeds.
    * Margin: high > low * 1.3 (observed ~1.6×).
    */
-  it("a high-postUp big records more rim+close attempts than a low-postUp big", () => {
+  it("a high-postUp big records more rim+close attempts than a low-postUp big", async () => {
     let highRimFga = 0;
     let lowRimFga = 0;
     for (const seed of SEEDS) {
+      await breathe();
       const high = playGame(
         seed,
         makeRoster("home", { strength: 90, weight: 280 }, { postUp: 95 }),
