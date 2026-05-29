@@ -182,14 +182,14 @@ describe("moveAll: steering toward target (arrive behavior)", () => {
     expect(d).toBeLessThan(0.6);
   });
 
-  it("when within 0.6 the desired speed is 0 -> decelerates", () => {
-    // Inside the arrive radius with inbound velocity: desv=0 so velocity is
-    // pulled toward 0 by acc*DT each tick.
+  it("inside the stop radius (0.3 ft) decelerates, then near-target damping halves v", () => {
+    // d = 0.2 < ARRIVE_STOP_R (0.3): desired speed is 0, so velocity is pulled
+    // toward 0 by acc*DT, then the near-target damp (d < 2*ARRIVE_STOP_R) halves it.
     seedRng(3);
     const p = soloPlayer({ x: 50.2, y: 25, vx: 10, vy: 0, speed: 50, fatigue: 0, target: { x: 50, y: 25 } });
     moveAll();
-    // dvx = 0; clamp(0 - 10, -4, 4) = -4 -> vx = 6
-    expect(p.vx).toBeCloseTo(6, 10);
+    // dvx = 0; clamp(0 - 10, -4, 4) = -4 -> vx = 6; then * 0.5 damping -> 3
+    expect(p.vx).toBeCloseTo(3, 10);
   });
 });
 
