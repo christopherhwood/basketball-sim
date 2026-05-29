@@ -90,6 +90,30 @@ const POST_FOUL_EDGE_SLOPE = 0.006; // extra foul-draw chance per point of edge
 const POST_FOUL_CAP = 0.32; // ceiling on post-up foul-draw chance
 const POST_OFFBALL_PIVOT = 70; // postUp tendency at/above which a big posts on the block off-ball
 
+/* ---------- OFF-BALL ROLE + MOTION TUNING ----------
+   Role classification and ball-reactive cutting knobs. Bigs operate INSIDE
+   (dunker spot / short corner / block); shooters space to the perimeter. */
+const BIG_SHOOT_THREE_MAX = 45; // shootThree below this -> treat as an inside (big) role
+const BIG_POST_PIVOT = POST_OFFBALL_PIVOT; // high postUp also marks an inside role
+const SCREENER_POP_THREE = 70; // a screening big only pops beyond the arc if shootThree above this
+
+// Inside home spots (relative to the attacking hoop), assigned to bigs so they
+// stop drifting to the arc. Two block/short-corner slots plus a dunker spot.
+const INSIDE_X = 5; // ft from the hoop along the baseline axis for block spots
+const INSIDE_SHORT_X = 8.5; // short-corner depth
+const DUNKER_X = 4; // dunker-spot depth (rolled-screener reset / lone big)
+
+// Ball-reactive cutting. Frequencies are per decision tick (offenseDecide cadence)
+// and stay small so motion reads as activity, not chaos.
+const CUT_BASE_CHANCE = 0.006; // baseline basket-cut chance, scaled by driveRim factor
+const CUT_PASS_BONUS = 0.006; // extra basket-cut chance the tick a pass is caught
+const CUT_EARLY_CLOCK_BONUS = 0.003; // extra cut chance early in the shot clock (fades by mid-clock)
+const CUT_EARLY_CLOCK_T = 12; // shot-clock seconds above which the early-clock bonus applies fully
+const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right after passing (give-and-go)
+const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
+const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
+const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
+
 /* ---------- 4) OFFENSE AI ---------- */
 export function offenseDecide(): void {
   const off = offTeam(),
@@ -314,7 +338,8 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
     }
     if (G.actionPhase === "bringup") {
       bh.target = { x: h.x + dir * 21, y: 25 };
-      screener.target = { x: h.x + dir * 11, y: 32 };
+      // come UP to the level of the screen from the interior, not from the arc
+      screener.target = { x: h.x + dir * 13, y: 30 };
       if (G.possClock > 1.6) {
         G.actionPhase = "screen";
       }
@@ -325,8 +350,17 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
         G.actionPhase = "roll";
       }
     } else if (G.actionPhase === "roll") {
-      const pops = screener.attr.three > 74 || effectiveTendencies(screener).shootThree > 74;
-      screener.target = pops ? { x: h.x + dir * 22, y: 30 } : { x: h.x + dir * 4, y: 25 };
+      // a genuine shooting big pops to the arc; everyone else rolls hard to the rim
+      const pops = screener.attr.three > SCREENER_POP_THREE && effectiveTendencies(screener).shootThree > SCREENER_POP_THREE;
+      const rolled = dist(screener, h) < 8;
+      if (pops) {
+        screener.target = { x: h.x + dir * 22, y: 30 };
+      } else if (rolled) {
+        // reset to an inside spot once the roll arrives — do NOT jog back out to the arc
+        screener.target = { x: h.x + dir * DUNKER_X, y: 25 };
+      } else {
+        screener.target = { x: h.x + dir * DUNKER_X, y: 25 };
+      }
       G.screen = { ball: bh, screener };
     }
   } else {
@@ -337,32 +371,70 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   offBallMove(off, def, h, dir, tac);
 }
 
-/* Off-ball movement: relocation to open space, lane-clearing on drives,
-   basket cuts with refill, and backdoor cuts against tight ball-side denial.
-   This is what generates open looks against disciplined help defense. */
+/* Classifies an off-ball player as an INSIDE (big) role vs a perimeter shooter.
+   A low-three OR high-postUp player operates near the rim; everyone else spaces
+   the floor. Drives inside-vs-perimeter spot assignment in offBallMove. */
+function isInsidePlayer(p: Player): boolean {
+  const t = effectiveTendencies(p);
+  return t.shootThree < BIG_SHOOT_THREE_MAX || t.postUp >= BIG_POST_PIVOT;
+}
+
+/* Off-ball movement: role-true spacing (bigs inside, shooters on the perimeter),
+   relocation to open space, lane-clearing on drives, ball-reactive basket cuts
+   with refill, give-and-go by the passer, weak-side lift, and backdoor cuts
+   against tight ball-side denial. Generates open looks against help defense. */
 function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: Tactics): void {
   const bh = G.ball.holder;
   if (!bh) return;
   const spots = spotsFor(G.attackHoop);
   const driving = G.driving && dist(bh, h) < 20;
   const driveLow = bh.y < 25;
-  // index defenders by their assignment once (first match wins, matching find())
-  const defByAssign = new Map<Player, Player>();
-  for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
+  // a pass was just caught this tick (set in possession.tick) -> trigger more motion
+  const justPassed = G.decideCD === 3;
+  const passer = G.pendingAssist || null;
+  const earlyClock = clamp((G.shotClock - (24 - CUT_EARLY_CLOCK_T)) / CUT_EARLY_CLOCK_T, 0, 1);
+
+  // role-true spot assignment: collect the off-ball movers, hand the perimeter
+  // spotsFor() slots to the shooters and the inside slots to the bigs.
+  const movers: Player[] = [];
   for (const p of off) {
     if (p === bh) continue;
     if (tac.action === "pnr" && p.role === "screener") continue; // screener owned by pnr logic
+    movers.push(p);
+  }
+  const bigs = movers.filter(isInsidePlayer);
+  // perimeter spots are all spotsFor slots except the handler slot (index 0)
+  const perimeterSpots = [spots[1], spots[2], spots[3], spots[4]];
+  // inside spots: two blocks, a short corner, and the dunker spot
+  const insideSpots: Point[] = [
+    { x: h.x + dir * INSIDE_X, y: 18 }, // left block
+    { x: h.x + dir * INSIDE_X, y: 32 }, // right block
+    { x: h.x + dir * INSIDE_SHORT_X, y: 14 }, // short corner
+    { x: h.x + dir * DUNKER_X, y: 25 }, // dunker spot
+  ];
+  // stable assignment by the player's seeded spot index so it does not flip-flop
+  const sortByObSpot = (a: Player, b: Player) => (a.ob?.spot ?? 0) - (b.ob?.spot ?? 0);
+  const shooters = movers.filter((p) => !isInsidePlayer(p)).sort(sortByObSpot);
+  bigs.sort(sortByObSpot);
+  const homeOf = new Map<Player, Point>();
+  shooters.forEach((p, i) => homeOf.set(p, perimeterSpots[i % perimeterSpots.length]));
+  bigs.forEach((p, i) => homeOf.set(p, insideSpots[i % insideSpots.length]));
+
+  // index defenders by their assignment once (first match wins, matching find())
+  const defByAssign = new Map<Player, Player>();
+  for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
+  for (const p of movers) {
     const ob = p.ob;
     if (!ob) continue;
     ob.t += DT;
     const d = defByAssign.get(p);
-    const cutFactor = tendencyFactor(effectiveTendencies(p).driveRim);
-    const shooterBig = threat(p) < 0.34;
-    const postThreat = effectiveTendencies(p).postUp >= POST_OFFBALL_PIVOT;
-    let home = spots[ob.spot] || spots[1];
-    if (shooterBig) home = { x: h.x + dir * 4.5, y: ob.spot % 2 ? 17.5 : 32.5 }; // non-shooters play near the rim
+    const tend = effectiveTendencies(p);
+    const cutFactor = tendencyFactor(tend.driveRim);
+    const inside = isInsidePlayer(p);
+    const postThreat = tend.postUp >= POST_OFFBALL_PIVOT;
+    let home = homeOf.get(p) || spots[ob.spot] || spots[1];
     // a high-postUp big posts up on the block so the pass logic can feed him
-    if (postThreat) home = { x: h.x + dir * 5, y: ob.spot % 2 ? 18.5 : 31.5 };
+    if (postThreat) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 18 : 32 };
 
     // --- cut in progress ---
     if (ob.state === "cut") {
@@ -370,13 +442,17 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       if (dist(p, { x: h.x, y: 25 }) < 5.5 || ob.t > 2.0) {
         ob.state = "fill";
         ob.t = 0;
-        ob.fill = mostOpenSpot(p, spots, off, def);
+        // bigs refill inside; shooters fill the most open perimeter spot
+        ob.fill = inside ? home : mostOpenSpot(p, perimeterSpots, off, def);
       }
       continue;
     }
     if (ob.state === "fill") {
-      p.target = ob.fill || home;
-      if (dist(p, ob.fill || home) < 3 || ob.t > 2.6) {
+      // refill the chosen open spot (an inside spot for bigs, a perimeter spot
+      // for shooters); fall back to home if none was recorded
+      const fillTo = ob.fill || home;
+      p.target = fillTo;
+      if (dist(p, fillTo) < 3 || ob.t > 2.6) {
         ob.state = "space";
         ob.t = 0;
       }
@@ -391,11 +467,25 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       const onDriveSide = p.y < 25 === driveLow;
       if (onDriveSide && dist(p, h) < 19) tgt = { x: home.x, y: 50 - home.y };
     } else {
-      // backdoor vs tight ball-side denial
-      if (d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45 && chance(0.05 * cutFactor)) {
+      // give-and-go: the player who just passed cuts hard to the rim
+      if (justPassed && p === passer && chance(GIVE_AND_GO_CHANCE * cutFactor)) {
+        ob.state = "cut";
+        ob.t = 0;
+        ob.cutY = p.y < 25 ? 19 : 31;
+        continue;
+      }
+      // backdoor vs tight ball-side denial (scaled by driveRim)
+      if (d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45 && chance(BACKDOOR_CHANCE * cutFactor)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 20 : 30;
+        continue;
+      }
+      // weak-side lift/fill into open space the moment the ball moves
+      if (justPassed && p !== passer && chance(POST_REACT_CHANCE)) {
+        ob.state = "fill";
+        ob.t = 0;
+        ob.fill = mostOpenSpot(p, inside ? insideSpots : perimeterSpots, off, def);
         continue;
       }
       // relocate into open space: slide a few feet away from my own defender
@@ -403,8 +493,14 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         const away = Math.sign(p.y - d.y) || 1;
         tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
       }
-      // occasional basket cut keeps the defense honest
-      if (chance(0.01 * cutFactor)) {
+      // ball-reactive basket cut: base rate scaled by driveRim, with bonuses
+      // the tick a pass is caught and early in the shot clock.
+      const cutChance = clamp(
+        (CUT_BASE_CHANCE + (justPassed ? CUT_PASS_BONUS : 0) + earlyClock * CUT_EARLY_CLOCK_BONUS) * cutFactor,
+        0,
+        CUT_CHANCE_CAP,
+      );
+      if (chance(cutChance)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 19 : 31;

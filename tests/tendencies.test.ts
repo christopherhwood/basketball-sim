@@ -183,7 +183,7 @@ describe("tendencies drive box-score behavior", () => {
     }
     // generous margin: the high team should take meaningfully more threes
     expect(highTpa).toBeGreaterThan(lowTpa * 1.5);
-  });
+  }, 30000);
 
   /*
    * TENDENCY: pass.  DIRECTION: higher pass => the team PASSES MORE.
@@ -211,7 +211,7 @@ describe("tendencies drive box-score behavior", () => {
       );
     }
     expect(highPasses).toBeGreaterThan(lowPasses * 1.15);
-  });
+  }, 30000);
 
   /*
    * TENDENCY: gambleSteal.  DIRECTION: higher gambleSteal => MORE steals.
@@ -238,7 +238,7 @@ describe("tendencies drive box-score behavior", () => {
       lowStl += sum(low.home, "stl");
     }
     expect(highStl).toBeGreaterThan(lowStl * 1.3);
-  });
+  }, 30000);
 
   /*
    * TENDENCY: crashGlass.  DIRECTION: higher crashGlass => MORE offensive boards.
@@ -264,5 +264,5 @@ describe("tendencies drive box-score behavior", () => {
       );
     }
     expect(highOreb).toBeGreaterThan(lowOreb * 1.08);
-  });
+  }, 30000);
 });

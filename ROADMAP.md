@@ -73,10 +73,13 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
 - **PR 5b — per-matchup defense.** Assignment overrides, double-teams, force-direction
   (reading the weak hand), switch-all, and the matchup-grid UI (showing height/weight).
   Neutral by default.
-- **PR 6 — smarter off-ball movement.** Ball-reactive cuts/relocations, role-true spacing
-  (bigs inside, shooters on the arc), off-ball screens and hand-offs, continuity — the
-  foundation set plays will build on.
-- **PR 7+ — depth.** Set plays / playbooks, substitutions, fatigue and foul trouble, fuller
+- **PR 6 — smarter off-ball movement (done).** Role-true spacing (bigs operate inside —
+  block/short-corner/dunker — shooters space the arc), the pick-and-roll screener resets
+  inside instead of jogging the arc, and ball-reactive cuts (give-and-go, weak-side fill,
+  backdoor) tuned to keep pace/3PA realistic. A positioning test asserts bigs play closer
+  to the rim than shooters. Foundation for set plays + the rebounding rework.
+- **PR 7+ — depth.** Rebounding rework (research-backed: carom + convergence + soft
+  weighting), set plays / playbooks, substitutions, fatigue and foul trouble, fuller
   transition game, badges/traits.
 
 Every system ships with tests, so the suite stays a complete cross-language spec — serving
