@@ -28,6 +28,7 @@ import { newGame, G } from "../src/core/state.js";
 import { tick } from "../src/sim/possession.js";
 import { toEnginePlayer } from "../src/data/playerData.js";
 import type { Player, PlayerData, Tendencies, BaseAttributes, TeamSide, Pos } from "../src/types.js";
+import { breathe } from "./helpers.js";
 
 const POSITIONS: Pos[] = ["PG", "SG", "SF", "PF", "C"];
 
@@ -114,12 +115,13 @@ describe("physical post play and rebounding drive box-score behavior", () => {
    * low-postUp home team. (The away defense is identical in both runs, so only
    * the home team's physique differs.)
    */
-  it("strong + heavy + high-postUp team scores MORE and draws MORE free throws in the post", () => {
+  it("strong + heavy + high-postUp team scores MORE and draws MORE free throws in the post", async () => {
     let strongPts = 0;
     let weakPts = 0;
     let strongFta = 0;
     let weakFta = 0;
     for (const seed of SEEDS) {
+      await breathe();
       const strong = playGame(
         seed,
         makeRoster("home", { strength: 99, weight: 300 }, { postUp: 100 }),
@@ -140,17 +142,18 @@ describe("physical post play and rebounding drive box-score behavior", () => {
     // gets to the line far more often (the post-up branch routes foul draws to FTs).
     expect(strongPts).toBeGreaterThan(weakPts * 1.5);
     expect(strongFta).toBeGreaterThan(weakFta * 3);
-  }, 30000);
+  });
 
   /*
    * PHYSIQUE: weight.  DIRECTION: heavier players hold rebounding position, so a
    * heavy home team grabs MORE total rebounds than a light one. The away team is
    * held fixed and neutral in both runs, so only the home team's mass varies.
    */
-  it("a heavy team grabs MORE rebounds than a light one (opponent held fixed)", () => {
+  it("a heavy team grabs MORE rebounds than a light one (opponent held fixed)", async () => {
     let heavyReb = 0;
     let lightReb = 0;
     for (const seed of SEEDS) {
+      await breathe();
       heavyReb += sum(
         playGame(seed, makeRoster("home", { weight: 320 }), makeRoster("away")).home,
         "reb",
@@ -163,5 +166,5 @@ describe("physical post play and rebounding drive box-score behavior", () => {
     // the rebounding mass term is bounded (it nudges boards without overpowering
     // skill/height/box-out), so the edge is modest but consistently positive.
     expect(heavyReb).toBeGreaterThan(lightReb);
-  }, 30000);
+  });
 });

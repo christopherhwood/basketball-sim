@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { seedRng } from "../src/core/rng.js";
 import { newGame, G, players } from "../src/core/state.js";
 import { tick } from "../src/sim/possession.js";
+import { breathe } from "./helpers.js";
 
 /*
  * BALANCE FLOOR GUARD.
@@ -27,11 +28,12 @@ function playToBuzzer(seed: number): void {
 }
 
 describe("balance floor: turnovers and steals stay realistic", () => {
-  it("turnovers and steals average well above zero across seeded games", () => {
+  it("turnovers and steals average well above zero across seeded games", async () => {
     const SEEDS = 12;
     let tov = 0,
       stl = 0;
     for (let s = 1; s <= SEEDS; s++) {
+      await breathe();
       seedRng(s);
       playToBuzzer(s);
       for (const p of players()) {

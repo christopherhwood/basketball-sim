@@ -4,3 +4,9 @@ dist
 coverage
 *.local
 .vite
+
+# User-added rosters: ignore everything in data/teams/ except the two built-in
+# sample teams. (data/free-agents.json — the built-in sample pool — stays tracked.)
+data/teams/*.json
+!data/teams/harbor-city-wolves.json
+!data/teams/summit-valley-rampart.json
