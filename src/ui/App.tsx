@@ -1,7 +1,5 @@
 import { useEffect } from "react";
-import { startLoop, stopLoop, newMatchup } from "../app/engine.js";
-import { loadLeagueFromGlob } from "../data/leagueBrowser.js";
-import { buildRosters, setCurrentRosters, setSelection, GENERATED } from "../app/matchup.js";
+import { startLoop, stopLoop } from "../app/engine.js";
 import { Scoreboard } from "./Scoreboard.js";
 import { Court } from "./Court.js";
 import { Controls } from "./Controls.js";
@@ -12,15 +10,6 @@ import { PlayByPlay } from "./PlayByPlay.js";
 
 export function App(): React.JSX.Element {
   useEffect(() => {
-    const { teams } = loadLeagueFromGlob();
-    const sel =
-      teams.length >= 2
-        ? { home: teams[0].id, away: teams[1].id }
-        : { home: GENERATED, away: GENERATED };
-    const rosters = buildRosters(sel, teams);
-    setSelection(sel);
-    setCurrentRosters(rosters);
-    newMatchup(rosters);
     startLoop();
     return () => stopLoop();
   }, []);
