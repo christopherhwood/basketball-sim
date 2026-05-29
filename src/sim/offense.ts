@@ -999,4 +999,18 @@ function startPass(from: Player, to: Player): void {
       }
     }
   }
+
+  // Give the ball a heading + speed aimed at the receiver. Each tick of flight
+  // the ball re-aims toward the receiver's LIVE position with a capped turn rate
+  // (see possession.ts), so the path stays near-straight but homes onto a moving
+  // receiver and ends exactly on them — a clean in-stride catch, no receiver
+  // override (the receiver keeps their own motion), so gameplay is unchanged.
+  const dx0 = to.x - from.x;
+  const dy0 = to.y - from.y;
+  const d0 = dist(from, to) || 1;
+  const travelSec = (G.ball.passDur as number) * DT;
+  G.ball.hx = dx0 / d0;
+  G.ball.hy = dy0 / d0;
+  G.ball.bspeed = d0 / travelSec;
+  G.ball.catchPoint = null;
 }
