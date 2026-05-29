@@ -10,6 +10,9 @@ const LANE_MAX_Y = 33;
 const LANE_DEPTH_FROM_HOOP = 13.75;
 const DEF_LANE_CLEAR_WARN_T = 1.5;
 const DEF_LANE_LOW_IQ_EXTRA_T = 1.0;
+const OFFBALL_TRACK_LAG_MAX = 4.8;
+const OFFBALL_TRACK_SPEED_START = 2.5;
+const OFFBALL_TRACK_SPEED_RANGE = 11;
 
 function paintBand(pt: Point, h: Point): boolean {
   return Math.abs(pt.x - h.x) <= LANE_DEPTH_FROM_HOOP && pt.y >= LANE_MIN_Y && pt.y <= LANE_MAX_Y;
@@ -25,6 +28,33 @@ function shouldClearDefensiveLane(d: Player, off: Player[], h: Point): boolean {
   const awareness = spacingAwareness(d);
   const warnAt = DEF_LANE_CLEAR_WARN_T + (1.15 - awareness) * DEF_LANE_LOW_IQ_EXTRA_T;
   return (d.defLaneT ?? 0) >= warnAt;
+}
+
+function matchupDefenseRating(d: Player, m: Player, h: Point): number {
+  const depth = dist(m, h);
+  const perimeterWeight = clamp((depth - 8) / 16, 0, 1);
+  return d.attr.interiorD * (1 - perimeterWeight) + d.attr.perimD * perimeterWeight;
+}
+
+function trackingQuality(d: Player, m: Player, h: Point): number {
+  const rating = matchupDefenseRating(d, m, h);
+  return clamp((d.attr.iq * 0.55 + rating * 0.45 - 42) / 48, 0, 1);
+}
+
+export function offBallDefensiveTarget(d: Player, m: Player, h: Point): Point {
+  const gap = 3 + (1 - threat(m)) * 3;
+  const base = {
+    x: lerp(m.x, h.x, gap / Math.max(dist(m, h), 1)),
+    y: lerp(m.y, h.y, gap / Math.max(dist(m, h), 1)),
+  };
+  const moverSpeed = Math.hypot(m.vx, m.vy);
+  const moving = clamp((moverSpeed - OFFBALL_TRACK_SPEED_START) / OFFBALL_TRACK_SPEED_RANGE, 0, 1);
+  if (moving <= 0) return base;
+
+  const quality = trackingQuality(d, m, h);
+  const lag = OFFBALL_TRACK_LAG_MAX * moving * (1 - quality);
+  if (lag <= 0.05) return base;
+  return { x: base.x - (m.vx / moverSpeed) * lag, y: base.y - (m.vy / moverSpeed) * lag };
 }
 
 /* ---------- DEFENSE AI ---------- */
@@ -64,11 +94,12 @@ export function defenseMove(): void {
       continue;
     }
     const onBall = m === bh;
-    let gap = onBall ? presDist : 3 + (1 - threat(m)) * 3; // sag off non-shooters
-    // position between man and basket
-    let tx = lerp(m.x, h.x, gap / Math.max(dist(m, h), 1));
-    let ty = lerp(m.y, h.y, gap / Math.max(dist(m, h), 1));
-    d.target = { x: m.x + (h.x - m.x) * 0.16 * (onBall ? 0.6 : 1), y: m.y + (h.y - m.y) * 0.16 * (onBall ? 0.6 : 1) };
+    d.target = onBall
+      ? {
+          x: m.x + (h.x - m.x) * 0.16 * 0.6,
+          y: m.y + (h.y - m.y) * 0.16 * 0.6,
+        }
+      : offBallDefensiveTarget(d, m, h);
     // keep on-ball defender right on the handler at the pressure distance
     if (onBall) {
       const dx = m.x - h.x,

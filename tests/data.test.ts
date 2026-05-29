@@ -254,5 +254,5 @@ describe("free agents optional", () => {
 // GOLDEN — discovered by running the loaded-roster game (seed 7, 3000 ticks).
 const GOLDEN = {
   homeScore: 14,
-  awayScore: 6,
+  awayScore: 5,
 };

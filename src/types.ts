@@ -182,6 +182,7 @@ export interface TransitionState {
   fastbreak?: boolean;
   kind?: string;
   outletFrom?: Player;
+  stealStart?: boolean;
 }
 
 export interface GameState {
