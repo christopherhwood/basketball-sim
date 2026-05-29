@@ -7,6 +7,7 @@ import { attemptShot } from "./resolution.js";
 import { beginLiveTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
+import { tendenciesOf, tendencyFactor } from "./tendency.js";
 import type { Player, Point, Tactics } from "../types.js";
 
 /* ---------- 4) OFFENSE AI ---------- */
@@ -43,8 +44,13 @@ export function offenseDecide(): void {
     // urgency as shot clock winds down
     const urg = G.shotClock < 10 ? (10 - G.shotClock) / 10 : 0;
 
+    // zone-specific shooting tendency (driveRim doubles as rim-shooting propensity).
+    // postUp has no mechanic yet and is intentionally left unwired.
+    const tendencies = tendenciesOf(bh);
+    const shootTend =
+      type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
     let shootU = ev * selM * (0.35 + 0.65 * open) + urg * 2.4;
-    shootU *= 0.7 + bh.attr.tendShoot * 0.6;
+    shootU *= tendencyFactor(shootTend);
 
     // drive utility: open lane + handle vs man, value of getting to rim
     const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
@@ -54,6 +60,7 @@ export function offenseDecide(): void {
       (1 - laneBlock * 0.7);
     if (tac.shotSel === "rim") driveU += 0.25;
     if (tac.shotSel === "three") driveU -= 0.2;
+    driveU *= tendencyFactor(tendencies.driveRim);
 
     // pass utility: find best teammate (more open / better look)
     let bestPass: Player | null = null,
@@ -74,7 +81,7 @@ export function offenseDecide(): void {
     }
     // ball-movement bias early in clock so it isn't iso every time
     const passBias = G.possClock < 6 ? 0.5 : 0.1;
-    let passU = bestPU + passBias;
+    let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass);
 
     // low IQ adds noise to the choice
     const noise = ((99 - bh.attr.iq) / 99) * 0.6;
@@ -121,7 +128,17 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   }
 
   if (tac.action === "pnr") {
-    const screener = off.find((p) => p.role === "screener") || off[4];
+    // pick the eligible big with the highest screen tendency; fall back to role/off[4]
+    let screener = off.find((p) => p.role === "screener") || off[4];
+    let bestScreen = -1;
+    for (const p of off) {
+      if (p === bh) continue;
+      const sc = tendenciesOf(p).screen;
+      if (sc > bestScreen) {
+        bestScreen = sc;
+        screener = p;
+      }
+    }
     if (G.actionPhase === "bringup") {
       bh.target = { x: h.x + dir * 21, y: 25 };
       screener.target = { x: h.x + dir * 11, y: 32 };
@@ -135,7 +152,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
         G.actionPhase = "roll";
       }
     } else if (G.actionPhase === "roll") {
-      const pops = screener.attr.three > 74;
+      const pops = screener.attr.three > 74 || tendenciesOf(screener).shootThree > 74;
       screener.target = pops ? { x: h.x + dir * 22, y: 30 } : { x: h.x + dir * 4, y: 25 };
       G.screen = { ball: bh, screener };
     }
@@ -166,6 +183,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     if (!ob) continue;
     ob.t += DT;
     const d = defByAssign.get(p);
+    const cutFactor = tendencyFactor(tendenciesOf(p).driveRim);
     const shooterBig = threat(p) < 0.34;
     let home = spots[ob.spot] || spots[1];
     if (shooterBig) home = { x: h.x + dir * 4.5, y: ob.spot % 2 ? 17.5 : 32.5 }; // non-shooters play near the rim
@@ -198,7 +216,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       if (onDriveSide && dist(p, h) < 19) tgt = { x: home.x, y: 50 - home.y };
     } else {
       // backdoor vs tight ball-side denial
-      if (d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45 && chance(0.05)) {
+      if (d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45 && chance(0.05 * cutFactor)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 20 : 30;
@@ -210,7 +228,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
       }
       // occasional basket cut keeps the defense honest
-      if (chance(0.01)) {
+      if (chance(0.01 * cutFactor)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 19 : 31;
@@ -272,7 +290,9 @@ function startPass(from: Player, to: Player): void {
   for (const d of def) {
     const ld = distToSeg(d, from, to);
     if (ld < 2.0 && dist(d, from) > 4 && dist(d, to) > 4) {
-      const sp = clamp(0.015 + (d.attr.steal - 70) / 600 - (from.attr.pass - 70) / 800, 0, 0.06);
+      const sp =
+        clamp(0.015 + (d.attr.steal - 70) / 600 - (from.attr.pass - 70) / 800, 0, 0.06) *
+        tendencyFactor(tendenciesOf(d).gambleSteal);
       if (chance(sp)) {
         d.stats.stl++;
         from.stats.tov++;

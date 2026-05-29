@@ -219,4 +219,17 @@ describe("genPlayer: single-player determinism and structure", () => {
       expect(p.attr).toHaveProperty(k);
     }
   });
+
+  it("copies tendencies verbatim from the archetype (no rng-derived noise)", () => {
+    // Tendencies were added to generation as a plain copy of ARCH[arch].tend,
+    // consuming no rng draws, so they must equal the archetype's tend exactly
+    // and be a distinct object (a defensive copy, not the shared template).
+    for (const archKey of ["floor_gen", "sharp", "wing_3d", "stretch_4", "rim_big", "slasher"]) {
+      seedRng(42);
+      resetNamePool();
+      const p = genPlayer(archKey, "home", 1);
+      expect(p.tendencies).toEqual(ARCH[archKey].tend);
+      expect(p.tendencies).not.toBe(ARCH[archKey].tend);
+    }
+  });
 });

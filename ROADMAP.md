@@ -51,8 +51,11 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
 - **PR 2b — React shell (done).** UI migrated to React + Vite (canvas court kept, engine
   untouched), with a roster/matchup selection UI over the loaded teams. React reads engine
   state via a small store + `useSyncExternalStore`.
-- **PR 3 — per-player decisions.** Extract the Decision layer; drive shoot/drive/pass/cut/
-  screen/help choices from per-player tendencies. Team tactics become defaults/biases.
+- **PR 3 — per-player decisions (done).** Tendencies (0..100, neutral at 50) drive the
+  ball-handler's shoot/drive/pass choices, off-ball cuts, screener selection, help defense,
+  passing-lane gambles, offensive-glass crashing, and transition pushes — so players behave
+  individually. Team tactics remain additional biases. `postUp` is defined but not yet wired
+  (no post-up mechanic). Behavioral tests assert each tendency moves the box score.
 - **PR 4 — coaching system.** Per-player and per-matchup directives + a coaching resolver,
   with UI controls.
 - **PR 5 — defensive matchups & assignments.** Manual and auto matchups, doubles, target

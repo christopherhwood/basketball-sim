@@ -4,6 +4,7 @@ import { rng } from "../core/rng.js";
 import { G, offTeam, defTeam, hoop, logEv } from "../core/state.js";
 import { beginScoreTransition, beginLiveTransition } from "./transition.js";
 import { setupPossession } from "./possession.js";
+import { tendenciesOf } from "./tendency.js";
 import type { Player, Point, ShotType } from "../types.js";
 
 /* ---------- 6) RESOLUTION ---------- */
@@ -93,6 +94,9 @@ function missAndRebound(sh: Player): void {
     const dd = dist(p, h);
     if (dd > 13) continue;
     const isDef = defSet.has(p);
+    // offensive players crash the glass according to their crashGlass tendency:
+    // 0 -> nothing, 50 -> mild bump, 100 -> meaningful contest (still below the +14 box-out)
+    const crash = !isDef && p.team === G.offense ? (tendenciesOf(p).crashGlass / 100) * 20 : 0;
     const w =
       p.attr.rebound * 0.6 +
       p.attr.height * 8 +
@@ -100,6 +104,7 @@ function missAndRebound(sh: Player): void {
       p.attr.strength * 0.2 +
       (13 - dd) * 4 +
       (isDef ? 14 : 0) +
+      crash +
       rng() * 40; // defense boxes out -> edge
     if (w > bw) {
       bw = w;

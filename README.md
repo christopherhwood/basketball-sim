@@ -109,9 +109,10 @@ matchup for now) and an optional `data/free-agents.json` (omit it entirely for c
 high-school leagues). Files are validated against `data/schema/*.json` on load. If `data/`
 is empty, the game falls back to archetype generation, so it still runs out of the box.
 
-Player JSON carries identity, the 25–99 `attributes`, and 0–100 `tendencies` (which the
-per-player AI in a later PR will consume). See `data/README.md` for the format and
-attribute scale.
+Player JSON carries identity, the 25–99 `attributes`, and 0–100 `tendencies`. Tendencies
+drive how often a player shoots from each zone, drives, passes, cuts, sets screens, helps,
+gambles for steals, crashes the glass, and pushes in transition (neutral at 50). See
+`data/README.md` for the format and attribute scale.
 
 A bundled Claude Code skill, **`generate-roster`** (`.claude/skills/generate-roster/`),
 teaches Claude to research public statistics and emit valid roster JSON — so realistic
