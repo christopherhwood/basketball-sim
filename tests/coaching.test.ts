@@ -103,8 +103,10 @@ function setup(seed: number): void {
   G.attackHoop = "R";
 }
 
+const TICK_CAP = 7000;
+
 function playToBuzzer(): void {
-  for (let i = 0; i < 100000 && !G.over; i++) tick();
+  for (let i = 0; i < TICK_CAP && !G.over; i++) tick();
 }
 
 const sum = (team: Player[], key: keyof Player["stats"]): number =>
@@ -151,7 +153,7 @@ async function aggregateHomePasses(seeds: number[], home: PlayerCoaching): Promi
     resetCoaching();
     coachHome(home);
     setup(seed);
-    for (let i = 0; i < 100000 && !G.over; i++) {
+    for (let i = 0; i < TICK_CAP && !G.over; i++) {
       const before = G.ball.state;
       tick();
       if (G.ball.state === "pass" && before !== "pass" && G.offense === "home") passes++;
