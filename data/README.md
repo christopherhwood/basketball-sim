@@ -42,7 +42,7 @@ Every player in a team file (and in `free-agents.json`) is the same shape, defin
   "number": 3,
   "position": "PG",
   "height": 6.2,
-  "attributes": { "speed": 88, "handle": 90, "...": "all 14 ratings" },
+  "attributes": { "speed": 88, "handleRight": 90, "handleLeft": 74, "weight": 190, "...": "all 16 ratings" },
   "tendencies": { "shootThree": 60, "pass": 85, "...": "all 10 tendencies" }
 }
 ```
@@ -52,15 +52,15 @@ Every player in a team file (and in `free-agents.json`) is the same shape, defin
 - **`position`** — one of `PG`, `SG`, `SF`, `PF`, `C`.
 - **`height`** — in feet, as a decimal. A 6-foot-9 player is `6.75`; a 7-footer is `7.0`.
   Use realistic heights for the position.
-- **`attributes`** — the 14 ratings below.
+- **`attributes`** — the 16 ratings below.
 - **`tendencies`** — the 10 tendencies below.
 
-### Attributes (the 14 ratings)
+### Attributes (the 16 ratings)
 
-`speed`, `handle`, `pass`, `three`, `mid`, `finishing`, `perimD`, `steal`, `iq`,
-`strength`, `vertical`, `rebound`, `interiorD`, `block`.
+`speed`, `handleLeft`, `handleRight`, `pass`, `three`, `mid`, `finishing`, `perimD`,
+`steal`, `iq`, `strength`, `weight`, `vertical`, `rebound`, `interiorD`, `block`.
 
-Every attribute is an integer on this scale:
+Every attribute except `weight` is an integer on this scale:
 
 | Range  | Meaning              |
 | ------ | -------------------- |
@@ -71,8 +71,19 @@ Every attribute is an integer on this scale:
 | 95+    | elite                |
 
 Make the ratings fit the player. A rim-running center should be high on `finishing`,
-`rebound`, `interiorD`, `block`, and `strength`, and low on `three` and `handle`. A
+`rebound`, `interiorD`, `block`, and `strength`, and low on `three` and ball-handling. A
 sharpshooter should be high on `three` (and on the `shootThree` tendency below).
+
+**`handleLeft` / `handleRight`** — handedness. Each is the player's ball-handling skill
+with that hand (25..99). The **higher of the two is the strong hand**; the other is the
+weak hand. Most players are right-dominant (`handleRight` higher), with a few lefties.
+A typical weak hand sits roughly 15-22 below the strong hand. Forcing a player to drive
+to his weak hand will hurt his ball-handling; right now the engine simply uses the
+stronger hand for default ball-handling.
+
+**`weight`** — in **pounds** (~150-330), not a 25..99 rating. It matters for **physical
+play**: heavier players hold position in rebounding battles and have an edge in post-ups.
+Use realistic weights for the position (guards ~175-205, wings ~210-235, bigs ~250-300).
 
 ### Tendencies (the 10 behaviors)
 

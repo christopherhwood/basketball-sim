@@ -7,7 +7,8 @@ export type Point = { x: number; y: number };
 
 export type BaseAttributes = {
   speed: number;
-  handle: number;
+  handleLeft: number;
+  handleRight: number;
   pass: number;
   three: number;
   mid: number;
@@ -16,6 +17,7 @@ export type BaseAttributes = {
   steal: number;
   iq: number;
   strength: number;
+  weight: number;
   vertical: number;
   rebound: number;
   interiorD: number;

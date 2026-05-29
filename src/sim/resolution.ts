@@ -17,6 +17,11 @@ const BLOCK_SLOPE = 1 / 720; // per (block-pivot) point; was 1/160
 const BLOCK_CONTEST_MULT = 0.06; // contest contribution; was 0.10
 const BLOCK_CAP = 0.13; // max block probability; was 0.28
 
+// --- rebounding weight (heavier players hold position) ---
+// Bounded so it nudges boards without dominating skill/height/box-out terms.
+const REBOUND_WEIGHT_MULT = 0.18; // per normalized weight unit
+const REBOUND_WEIGHT_NORM = 10; // (weight - 220) / NORM -> normalized weight units
+
 function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   let best: Player | null = null,
     bd = 1e9;
@@ -109,11 +114,15 @@ function missAndRebound(sh: Player): void {
     // offensive players crash the glass according to their crashGlass tendency:
     // 0 -> nothing, 50 -> mild bump, 100 -> meaningful contest (still below the +14 box-out)
     const crash = !isDef && p.team === G.offense ? (effectiveTendencies(p).crashGlass / 100) * 20 : 0;
+    // heavier players hold rebounding position; bounded so it nudges boards
+    // without overpowering rebound skill, height, or the box-out edge.
+    const weightTerm = clamp(((p.attr.weight - 220) / REBOUND_WEIGHT_NORM) * REBOUND_WEIGHT_MULT, -3, 6);
     const w =
       p.attr.rebound * 0.6 +
       p.attr.height * 8 +
       p.attr.vertical * 0.25 +
       p.attr.strength * 0.2 +
+      weightTerm +
       (13 - dd) * 4 +
       (isDef ? 14 : 0) +
       crash +
@@ -164,7 +173,7 @@ function setupFTLineup(sh: Player): void {
   off.forEach((o, i) => (o.target = i < 2 ? block[2 + i] : { x: h.x + dir * 18, y: 42 }));
 }
 
-function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean): void {
+export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean): void {
   if (andOne) {
     // shot fell + foul: count bucket + 1 FT
     sh.stats.fga++;

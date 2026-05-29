@@ -15,7 +15,7 @@ must validate against it.
 
 Always start by reading these so the output matches the current contract exactly:
 
-- `data/schema/player.schema.json` — the per-player shape (14 attributes, 10
+- `data/schema/player.schema.json` — the per-player shape (16 attributes, 10
   tendencies, name/number/position/height). This is the source of truth.
 - `data/schema/team.schema.json` — team shape (`id`, `name`, `abbrev`, `players`;
   `id` is kebab-case, `abbrev` is 2..4 chars, at least 5 players).
@@ -24,14 +24,24 @@ Always start by reading these so the output matches the current contract exactly
   so a new team is calibrated against the existing league.
 
 Key constraints to respect (the schema rejects anything else):
-- All 14 `attributes` are integers **25..99**.
+- All `attributes` are integers **25..99**, except `weight` which is an integer
+  **150..330** (pounds).
 - All 10 `tendencies` are integers **0..100**.
 - `position` is one of `PG`, `SG`, `SF`, `PF`, `C`.
 - `height` is in **feet** (e.g. `6.75` for 6'9"), range 5.5..7.6.
 - `number` is an integer 0..99.
-- Author the `attributes` object with the **14 ratings only** — do NOT put
+- Author the `attributes` object with the **16 ratings only** — do NOT put
   `height` or `tendShoot` inside `attributes`. The loader supplies `attr.height`
   from the top-level `height` and computes `tendShoot` from the shoot tendencies.
+- Ball-handling is split into `handleLeft` and `handleRight` (handedness). The
+  **higher of the two is the strong hand**; give most players a higher
+  `handleRight` (right-dominant) and a few a higher `handleLeft` (lefties). The
+  weak hand typically sits ~15-22 below the strong hand. The engine uses the
+  stronger hand for default ball-handling; forcing a player to his weak hand
+  hurts.
+- `weight` is in **pounds** (~150-330), not a 25..99 rating. It matters for
+  physical play: rebounding (heavier players hold position) and post-ups. Use
+  realistic weights by position.
 
 ## 2. Rating and tendency scales
 
@@ -72,7 +82,9 @@ Use these as starting points, then sanity-check for internal consistency:
   - AST per game and AST% → both the `pass` rating (skill) and `pass` tendency
     (how often they look to set up others). High AST, low usage → high `pass`
     tendency relative to shooting.
-  - `handle` ← turnover-light high-usage ball handling, dribble creation.
+  - `handleLeft` / `handleRight` ← turnover-light high-usage ball handling,
+    dribble creation; set the dominant hand higher (most players right-dominant,
+    a few lefties) with the weak hand ~15-22 lower.
   - `speed` ← athleticism, transition involvement, end-to-end quickness.
 - **Defense → `steal` / `block` / `perimD` / `interiorD`**
   - STL per game / STL% → `steal` rating and `gambleSteal` tendency.
@@ -82,8 +94,11 @@ Use these as starting points, then sanity-check for internal consistency:
 - **Rebounding → `rebound`** from TRB (and ORB/DRB) per game **scaled by height and
   position**. A 6'2" guard with 5 TRB is a strong rebounding guard (~70); a 6'11"
   center with 5 TRB is mediocre (~55).
-- **Size → `strength` / `vertical` / `height`**
-  - `strength` ← weight, post defense, physicality.
+- **Size → `strength` / `weight` / `vertical` / `height`**
+  - `strength` ← post defense, physicality, ability to hold position.
+  - `weight` ← listed playing weight in **pounds** (~150-330). Drives rebounding
+    and post-ups along with `strength`. Guards ~175-205, wings ~210-235, bigs
+    ~250-300.
   - `vertical` ← dunks, blocks, putbacks, athletic reputation.
 - **Position + role → `driveRim` / `postUp` / `screen` tendencies**
   - Slashing guards/wings → high `driveRim`, low `postUp`.
@@ -155,9 +170,10 @@ traceable and re-derivable. A short list at the end is enough.
       "position": "PG",
       "height": 6.25,
       "attributes": {
-        "speed": 82, "handle": 85, "pass": 84, "three": 78, "mid": 72,
-        "finishing": 70, "perimD": 68, "steal": 72, "iq": 80, "strength": 55,
-        "vertical": 65, "rebound": 45, "interiorD": 45, "block": 35
+        "speed": 82, "handleRight": 85, "handleLeft": 67, "pass": 84, "three": 78,
+        "mid": 72, "finishing": 70, "perimD": 68, "steal": 72, "iq": 80,
+        "strength": 55, "weight": 190, "vertical": 65, "rebound": 45,
+        "interiorD": 45, "block": 35
       },
       "tendencies": {
         "shootThree": 55, "shootMid": 35, "driveRim": 60, "pass": 80,
@@ -171,9 +187,10 @@ traceable and re-derivable. A short list at the end is enough.
       "position": "SG",
       "height": 6.5,
       "attributes": {
-        "speed": 76, "handle": 70, "pass": 60, "three": 88, "mid": 75,
-        "finishing": 68, "perimD": 70, "steal": 66, "iq": 70, "strength": 60,
-        "vertical": 70, "rebound": 48, "interiorD": 48, "block": 40
+        "speed": 76, "handleRight": 70, "handleLeft": 52, "pass": 60, "three": 88,
+        "mid": 75, "finishing": 68, "perimD": 70, "steal": 66, "iq": 70,
+        "strength": 60, "weight": 205, "vertical": 70, "rebound": 48,
+        "interiorD": 48, "block": 40
       },
       "tendencies": {
         "shootThree": 75, "shootMid": 45, "driveRim": 40, "pass": 45,
@@ -187,9 +204,10 @@ traceable and re-derivable. A short list at the end is enough.
       "position": "SF",
       "height": 6.75,
       "attributes": {
-        "speed": 74, "handle": 68, "pass": 66, "three": 74, "mid": 70,
-        "finishing": 78, "perimD": 78, "steal": 68, "iq": 72, "strength": 70,
-        "vertical": 78, "rebound": 62, "interiorD": 62, "block": 55
+        "speed": 74, "handleRight": 68, "handleLeft": 50, "pass": 66, "three": 74,
+        "mid": 70, "finishing": 78, "perimD": 78, "steal": 68, "iq": 72,
+        "strength": 70, "weight": 225, "vertical": 78, "rebound": 62,
+        "interiorD": 62, "block": 55
       },
       "tendencies": {
         "shootThree": 50, "shootMid": 35, "driveRim": 55, "pass": 50,
@@ -203,9 +221,10 @@ traceable and re-derivable. A short list at the end is enough.
       "position": "PF",
       "height": 6.83,
       "attributes": {
-        "speed": 62, "handle": 55, "pass": 58, "three": 60, "mid": 62,
-        "finishing": 80, "perimD": 62, "steal": 55, "iq": 68, "strength": 82,
-        "vertical": 75, "rebound": 80, "interiorD": 78, "block": 70
+        "speed": 62, "handleRight": 55, "handleLeft": 38, "pass": 58, "three": 60,
+        "mid": 62, "finishing": 80, "perimD": 62, "steal": 55, "iq": 68,
+        "strength": 82, "weight": 250, "vertical": 75, "rebound": 80,
+        "interiorD": 78, "block": 70
       },
       "tendencies": {
         "shootThree": 30, "shootMid": 35, "driveRim": 45, "pass": 40,
@@ -219,9 +238,10 @@ traceable and re-derivable. A short list at the end is enough.
       "position": "C",
       "height": 7.0,
       "attributes": {
-        "speed": 52, "handle": 45, "pass": 52, "three": 32, "mid": 50,
-        "finishing": 84, "perimD": 50, "steal": 48, "iq": 66, "strength": 88,
-        "vertical": 74, "rebound": 88, "interiorD": 86, "block": 84
+        "speed": 52, "handleRight": 45, "handleLeft": 30, "pass": 52, "three": 32,
+        "mid": 50, "finishing": 84, "perimD": 50, "steal": 48, "iq": 66,
+        "strength": 88, "weight": 285, "vertical": 74, "rebound": 88,
+        "interiorD": 86, "block": 84
       },
       "tendencies": {
         "shootThree": 5, "shootMid": 20, "driveRim": 40, "pass": 35,

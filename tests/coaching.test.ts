@@ -40,7 +40,9 @@ const HOME_NUMS = [1, 2, 3, 4, 5];
 function baseAttributes(): BaseAttributes {
   return {
     speed: 75,
-    handle: 75,
+    handleLeft: 75,
+    handleRight: 75,
+    weight: 220,
     pass: 75,
     three: 75,
     mid: 75,
