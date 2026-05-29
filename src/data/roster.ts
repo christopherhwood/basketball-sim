@@ -37,10 +37,18 @@ export function genPlayer(archKey: string, team: TeamSide, num: number): Player 
       attr.tendShoot = clamp(a.t[key] + randn() * 0.05, 0.3, 0.9);
     } else if (key === "height") {
       attr.height = +(a.t[key] + randn() * 0.12).toFixed(2);
+    } else if (key === "weight") {
+      // derived after the loop once attr.height is set; no rng draw
     } else {
+      // every 25..99 rating gets its own draw, including handleLeft and handleRight —
+      // so each player's off-hand varies independently (the archetype templates encode
+      // which hand is dominant; individual handedness gaps fall out of the two draws).
       attr[key] = clamp(Math.round(a.t[key] + randn() * 6), 25, 99);
     }
   }
+  // weight scales off the player's drawn height relative to the template height,
+  // so it must be computed after height has been set above (no extra rng draw).
+  attr.weight = Math.round(a.t.weight + (attr.height - a.t.height) * 18);
   p.tendencies = { ...ARCH[archKey].tend };
   p.name = namePool.pop() as string;
   return p;

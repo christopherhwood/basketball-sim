@@ -26,7 +26,8 @@ import type { Player, PlayerData, TeamData } from "../src/types.js";
 
 const ATTR_KEYS = [
   "speed",
-  "handle",
+  "handleLeft",
+  "handleRight",
   "pass",
   "three",
   "mid",
@@ -57,7 +58,9 @@ const TEND_KEYS = [
 function makeAttributes(): PlayerData["attributes"] {
   return {
     speed: 80,
-    handle: 80,
+    handleLeft: 80,
+    handleRight: 80,
+    weight: 220,
     pass: 80,
     three: 80,
     mid: 80,
@@ -250,6 +253,6 @@ describe("free agents optional", () => {
 
 // GOLDEN — discovered by running the loaded-roster game (seed 7, 3000 ticks).
 const GOLDEN = {
-  homeScore: 9,
-  awayScore: 4,
+  homeScore: 5,
+  awayScore: 7,
 };

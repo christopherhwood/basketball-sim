@@ -7,7 +7,8 @@ import { tendenciesOf } from "../sim/tendency.js";
 
 const ATTR_ROWS: { key: keyof Player["attr"]; label: string }[] = [
   { key: "speed", label: "Speed" },
-  { key: "handle", label: "Handle" },
+  { key: "handleLeft", label: "Handle L" },
+  { key: "handleRight", label: "Handle R" },
   { key: "pass", label: "Pass" },
   { key: "three", label: "3PT" },
   { key: "mid", label: "Mid" },
@@ -64,7 +65,7 @@ export function PlayerInspector({ player, onClose }: { player: Player; onClose: 
         #{player.num} {player.name}
       </h3>
       <div className="popover-sub">
-        {player.pos} · {feetInches(player.attr.height)}
+        {player.pos} · {feetInches(player.attr.height)} · {player.attr.weight} lb
       </div>
 
       <div className="stat-sec">Attributes</div>

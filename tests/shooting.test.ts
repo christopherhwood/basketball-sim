@@ -41,7 +41,9 @@ import type { Player, Attributes, ShotType } from "../src/types.js";
  * Player so the tests stay focused on the model under test. */
 const ATTR_DEFAULTS: Attributes = {
   speed: 55,
-  handle: 55,
+  handleLeft: 55,
+  handleRight: 55,
+  weight: 220,
   pass: 55,
   three: 55,
   mid: 55,

@@ -22,17 +22,18 @@ import { ARCH, type ArchetypeTemplate } from "../src/data/archetypes.js";
 //   - Jersey numbers come from base array [1,3,7,21,33]; the away team adds +40 to each.
 //
 // IMPORTANT: randn() consumes TWO rng() draws (Box-Muller), and it loops/redraws
-// while a draw is exactly 0. The order template keys are visited is the object key
-// insertion order of ArchetypeTemplate / each archetype's `t`, which is:
-//   speed, handle, pass, three, mid, finishing, perimD, steal, iq, strength,
-//   vertical, rebound, interiorD, block, height, tendShoot
-// so 16 randn() calls per player (one per attribute; each randn = 2 base rng() draws,
-// with redraw-on-zero), then 1 name pop per player. genTeam additionally consumes one
+// while a draw is exactly 0. Template keys are visited in object insertion order:
+//   speed, handleLeft, handleRight, weight, pass, three, mid, finishing, perimD,
+//   steal, iq, strength, vertical, rebound, interiorD, block, height, tendShoot
+// handleLeft and handleRight each get their OWN draw (a player's off-hand varies
+// independently); weight is DERIVED from height after the loop (no rng draw). So
+// 17 randn() calls per player (15 ratings + height + tendShoot; each randn = 2 base
+// rng() draws, redraw-on-zero), then 1 name pop. genTeam additionally consumes one
 // rng() draw up front for the chance(0.5) slasher swap.
 
 // The 25..99 rating attributes (everything except height/tendShoot).
 const RATING_KEYS: (keyof ArchetypeTemplate)[] = [
-  "speed", "handle", "pass", "three", "mid", "finishing", "perimD",
+  "speed", "handleLeft", "handleRight", "pass", "three", "mid", "finishing", "perimD",
   "steal", "iq", "strength", "vertical", "rebound", "interiorD", "block",
 ];
 
@@ -102,6 +103,23 @@ describe("attribute bounds (invariants for any seed)", () => {
     }
   });
 
+  it("handleLeft/handleRight stay within [25, 99] and weight stays in a sane range", () => {
+    for (const seed of [1, 5, 13, 42, 256, 9999]) {
+      seedRng(seed);
+      resetNamePool();
+      const players = [...genTeam("home"), ...genTeam("away")];
+      for (const p of players) {
+        expect(p.attr.handleLeft).toBeGreaterThanOrEqual(25);
+        expect(p.attr.handleLeft).toBeLessThanOrEqual(99);
+        expect(p.attr.handleRight).toBeGreaterThanOrEqual(25);
+        expect(p.attr.handleRight).toBeLessThanOrEqual(99);
+        expect(Number.isInteger(p.attr.weight)).toBe(true);
+        expect(p.attr.weight).toBeGreaterThanOrEqual(150);
+        expect(p.attr.weight).toBeLessThanOrEqual(320);
+      }
+    }
+  });
+
   it("tendShoot stays within [0.3, 0.9]", () => {
     for (const seed of [1, 5, 13, 42, 256, 9999]) {
       seedRng(seed);
@@ -140,19 +158,19 @@ describe("GOLDEN VECTOR: seedRng(42) + resetNamePool() then genTeam('home'), gen
   // For seed 42 the index-1 swap fires for HOME (-> "slasher") but NOT for AWAY (-> "sharp").
 
   const HOME_GOLDEN = [
-    { num: 1, pos: "PG", arch: "floor_gen", name: "Ferro", attr: { speed: 77, handle: 84, pass: 94, three: 82, mid: 77, finishing: 67, perimD: 77, steal: 79, iq: 88, strength: 57, vertical: 67, rebound: 44, interiorD: 59, block: 40, height: 6.15, tendShoot: 0.5343268832949084 } },
-    { num: 3, pos: "SG", arch: "slasher", name: "Hahn", attr: { speed: 86, handle: 87, pass: 76, three: 67, mid: 84, finishing: 85, perimD: 77, steal: 82, iq: 75, strength: 63, vertical: 87, rebound: 49, interiorD: 68, block: 56, height: 6.44, tendShoot: 0.7015698220209964 } },
-    { num: 7, pos: "SF", arch: "wing_3d", name: "Crane", attr: { speed: 74, handle: 75, pass: 62, three: 79, mid: 67, finishing: 83, perimD: 89, steal: 82, iq: 70, strength: 67, vertical: 75, rebound: 58, interiorD: 77, block: 49, height: 6.49, tendShoot: 0.5047082099487633 } },
-    { num: 21, pos: "PF", arch: "stretch_4", name: "Costa", attr: { speed: 67, handle: 58, pass: 69, three: 80, mid: 73, finishing: 69, perimD: 55, steal: 58, iq: 77, strength: 84, vertical: 75, rebound: 81, interiorD: 83, block: 68, height: 6.74, tendShoot: 0.6047732347201843 } },
-    { num: 33, pos: "C", arch: "rim_big", name: "Tanaka", attr: { speed: 63, handle: 48, pass: 69, three: 29, mid: 55, finishing: 90, perimD: 58, steal: 47, iq: 66, strength: 91, vertical: 88, rebound: 89, interiorD: 94, block: 98, height: 6.84, tendShoot: 0.48845928256933824 } },
+    { num: 1, pos: "PG", arch: "floor_gen", name: "Ferro", attr: { speed: 77, handleLeft: 68, handleRight: 92, pass: 96, three: 75, mid: 69, finishing: 81, perimD: 73, steal: 78, iq: 87, strength: 57, vertical: 69, rebound: 49, interiorD: 60, block: 32, height: 6.16, tendShoot: 0.514815025746043, weight: 184 } },
+    { num: 3, pos: "SG", arch: "slasher", name: "Hahn", attr: { speed: 92, handleLeft: 71, handleRight: 88, pass: 86, three: 61, mid: 73, finishing: 92, perimD: 73, steal: 71, iq: 77, strength: 67, vertical: 96, rebound: 60, interiorD: 57, block: 51, height: 6.33, tendShoot: 0.7040805068785624, weight: 202 } },
+    { num: 7, pos: "SF", arch: "wing_3d", name: "Crane", attr: { speed: 78, handleLeft: 71, handleRight: 49, pass: 69, three: 79, mid: 72, finishing: 70, perimD: 83, steal: 75, iq: 76, strength: 81, vertical: 73, rebound: 56, interiorD: 71, block: 55, height: 6.51, tendShoot: 0.5421934096509999, weight: 218 } },
+    { num: 21, pos: "PF", arch: "stretch_4", name: "Costa", attr: { speed: 68, handleLeft: 37, handleRight: 49, pass: 53, three: 80, mid: 79, finishing: 86, perimD: 63, steal: 63, iq: 81, strength: 82, vertical: 70, rebound: 85, interiorD: 83, block: 66, height: 7.16, tendShoot: 0.4558438714346441, weight: 250 } },
+    { num: 33, pos: "C", arch: "rim_big", name: "Tanaka", attr: { speed: 58, handleLeft: 27, handleRight: 51, pass: 53, three: 32, mid: 54, finishing: 98, perimD: 52, steal: 52, iq: 82, strength: 84, vertical: 85, rebound: 89, interiorD: 95, block: 96, height: 6.92, tendShoot: 0.39189727919052947, weight: 264 } },
   ];
 
   const AWAY_GOLDEN = [
-    { num: 41, pos: "PG", arch: "floor_gen", name: "Mensah", attr: { speed: 86, handle: 88, pass: 99, three: 69, mid: 79, finishing: 79, perimD: 69, steal: 74, iq: 83, strength: 56, vertical: 76, rebound: 44, interiorD: 49, block: 30, height: 6.44, tendShoot: 0.6415594069971968 } },
-    { num: 43, pos: "SG", arch: "sharp", name: "Reyes", attr: { speed: 90, handle: 67, pass: 74, three: 82, mid: 81, finishing: 79, perimD: 72, steal: 72, iq: 80, strength: 65, vertical: 85, rebound: 47, interiorD: 52, block: 46, height: 6.14, tendShoot: 0.7643240957081662 } },
-    { num: 47, pos: "SF", arch: "wing_3d", name: "Ade", attr: { speed: 78, handle: 82, pass: 66, three: 84, mid: 71, finishing: 82, perimD: 81, steal: 78, iq: 75, strength: 80, vertical: 82, rebound: 56, interiorD: 74, block: 64, height: 6.73, tendShoot: 0.46450684709059137 } },
-    { num: 61, pos: "PF", arch: "stretch_4", name: "Dumas", attr: { speed: 73, handle: 66, pass: 67, three: 91, mid: 77, finishing: 83, perimD: 65, steal: 66, iq: 73, strength: 87, vertical: 84, rebound: 73, interiorD: 72, block: 61, height: 7.05, tendShoot: 0.6280988473651372 } },
-    { num: 73, pos: "C", arch: "rim_big", name: "Bjork", attr: { speed: 62, handle: 47, pass: 69, three: 37, mid: 61, finishing: 95, perimD: 53, steal: 41, iq: 64, strength: 91, vertical: 75, rebound: 86, interiorD: 95, block: 95, height: 7.23, tendShoot: 0.37971063449035153 } },
+    { num: 41, pos: "PG", arch: "floor_gen", name: "Mensah", attr: { speed: 89, handleLeft: 69, handleRight: 84, pass: 85, three: 74, mid: 86, finishing: 77, perimD: 68, steal: 75, iq: 99, strength: 71, vertical: 80, rebound: 37, interiorD: 61, block: 25, height: 6.14, tendShoot: 0.5943272666612982, weight: 184 } },
+    { num: 43, pos: "SG", arch: "sharp", name: "Reyes", attr: { speed: 80, handleLeft: 60, handleRight: 77, pass: 71, three: 99, mid: 83, finishing: 71, perimD: 78, steal: 57, iq: 76, strength: 58, vertical: 84, rebound: 48, interiorD: 59, block: 39, height: 6.45, tendShoot: 0.7037376155317344, weight: 201 } },
+    { num: 47, pos: "SF", arch: "wing_3d", name: "Ade", attr: { speed: 78, handleLeft: 67, handleRight: 60, pass: 66, three: 74, mid: 76, finishing: 86, perimD: 97, steal: 78, iq: 83, strength: 78, vertical: 85, rebound: 71, interiorD: 69, block: 59, height: 6.58, tendShoot: 0.5523780125597801, weight: 220 } },
+    { num: 61, pos: "PF", arch: "stretch_4", name: "Dumas", attr: { speed: 67, handleLeft: 49, handleRight: 68, pass: 59, three: 76, mid: 73, finishing: 89, perimD: 75, steal: 64, iq: 75, strength: 93, vertical: 75, rebound: 84, interiorD: 83, block: 64, height: 6.72, tendShoot: 0.4661574023570383, weight: 242 } },
+    { num: 73, pos: "C", arch: "rim_big", name: "Bjork", attr: { speed: 57, handleLeft: 25, handleRight: 42, pass: 59, three: 45, mid: 67, finishing: 82, perimD: 56, steal: 49, iq: 72, strength: 97, vertical: 81, rebound: 94, interiorD: 88, block: 99, height: 6.92, tendShoot: 0.4568918124805992, weight: 264 } },
   ];
 
   function snapshot(p: ReturnType<typeof genPlayer>) {
@@ -190,9 +208,9 @@ describe("genPlayer: single-player determinism and structure", () => {
     expect(lone.arch).toBe("floor_gen");
     expect(lone.name).toBe("Ferro");
     expect(lone.attr).toEqual({
-      speed: 99, handle: 81, pass: 97, three: 75, mid: 80, finishing: 80,
-      perimD: 77, steal: 92, iq: 96, strength: 53, vertical: 63, rebound: 44,
-      interiorD: 46, block: 34, height: 6.21, tendShoot: 0.4878056441292982,
+      speed: 99, handleLeft: 65, handleRight: 95, pass: 89, three: 78, mid: 82, finishing: 81,
+      perimD: 86, steal: 86, iq: 83, strength: 53, vertical: 69, rebound: 36,
+      interiorD: 54, block: 36, height: 6.05, tendShoot: 0.6128711410764927, weight: 182,
     });
   });
 

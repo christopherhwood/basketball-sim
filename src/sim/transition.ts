@@ -208,9 +208,11 @@ export function beginLiveTransition(recoverer: Player): void {
   players().forEach((p) => {
     if (!p.target) p.target = { x: p.x, y: p.y };
   });
+  // best ball-handler by stronger hand (default until force-direction exists)
+  const handleOf = (p: Player): number => Math.max(p.attr.handleLeft, p.attr.handleRight);
   let adv = off[0];
   for (const p of off) {
-    if (p.attr.handle > adv.attr.handle) adv = p;
+    if (handleOf(p) > handleOf(adv)) adv = p;
   }
   if (adv === recoverer || dist(recoverer, adv) < 7) {
     recoverer.hasBall = true;

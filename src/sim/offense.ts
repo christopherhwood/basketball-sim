@@ -8,7 +8,24 @@ import { beginLiveTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
+import { beginFouled } from "./resolution.js";
 import type { Player, Point, Tactics } from "../types.js";
+
+/* Default ball-handling rating: the stronger hand. Force-direction (a later PR)
+   will pick the hand the defense forces the handler toward; until then every
+   read uses the better hand so behavior stays ~unchanged. */
+function handleOf(p: Player): number {
+  return Math.max(p.attr.handleLeft, p.attr.handleRight);
+}
+
+/* Physical-play helpers for the post. weightTerm rewards mass on a bounded
+   scale; heightTerm rewards length. Both feed the post-up physical EDGE. */
+function weightTerm(p: Player): number {
+  return clamp((p.attr.weight - 220) / 12, -6, 8);
+}
+function heightTerm(p: Player): number {
+  return clamp((p.attr.height - 6.5) * 6, -4, 6);
+}
 
 /* ---------- TURNOVER / STEAL / SHOT-SELECTION TUNING ----------
    Every magnitude below is a named knob so the tuning phase can adjust the
@@ -61,6 +78,18 @@ const THREE_TEND_COMPRESS = 0.62;
 // so it tightens the floor without pushing the pace-and-space ceiling over.
 const THREE_UTILITY_FLOOR = 1.85;
 
+// Post-up mechanic (adds close buckets + free throws for bigs). A post threat
+// near the basket with a physical edge over his on-ball defender backs him down.
+const POST_RANGE = 12; // ft to the hoop within which a post-up is available
+const POST_EDGE_UTIL_MULT = 0.05; // converts physical edge -> base post-up utility
+const POST_TEND_MULT = 1.4; // scales post-up utility by the postUp tendency factor
+const POST_EDGE_MULT = 0.012; // make-prob bump per point of physical edge
+const POST_EDGE_MAKE_CAP = 0.16; // ceiling on the make-prob bump from the edge
+const POST_FOUL_BASE = 0.12; // baseline foul-draw chance on a backdown
+const POST_FOUL_EDGE_SLOPE = 0.006; // extra foul-draw chance per point of edge
+const POST_FOUL_CAP = 0.32; // ceiling on post-up foul-draw chance
+const POST_OFFBALL_PIVOT = 70; // postUp tendency at/above which a big posts on the block off-ball
+
 /* ---------- 4) OFFENSE AI ---------- */
 export function offenseDecide(): void {
   const off = offTeam(),
@@ -85,7 +114,7 @@ export function offenseDecide(): void {
     {
       const onBallDef = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
       if (onBallDef) {
-        const stealEdge = (onBallDef.attr.steal - bh.attr.handle) * STRIP_STEAL_SLOPE;
+        const stealEdge = (onBallDef.attr.steal - handleOf(bh)) * STRIP_STEAL_SLOPE;
         const iqEdge = (onBallDef.attr.iq - bh.attr.iq) * STRIP_IQ_SLOPE;
         let tovP =
           (ON_BALL_TOV_BASE + Math.max(0, stealEdge) + Math.max(0, iqEdge)) *
@@ -132,7 +161,8 @@ export function offenseDecide(): void {
     const urg = G.shotClock < 10 ? (10 - G.shotClock) / 10 : 0;
 
     // zone-specific shooting tendency (driveRim doubles as rim-shooting propensity).
-    // postUp has no mechanic yet and is intentionally left unwired.
+    // postUp drives the post-up branch below: a post threat near the basket with a
+    // physical edge over his on-ball defender backs him down for a close look or foul.
     const tendencies = effectiveTendencies(bh);
     const shootTend =
       type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
@@ -162,7 +192,7 @@ export function offenseDecide(): void {
     const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
     const laneBlock = rimHelp(bh, def, h);
     let driveU =
-      (dh > 6 ? clamp((bh.attr.handle - (onBall ? onBall.attr.perimD : 50)) / 40, -0.3, 0.6) + 0.45 : -1) *
+      (dh > 6 ? clamp((handleOf(bh) - (onBall ? onBall.attr.perimD : 50)) / 40, -0.3, 0.6) + 0.45 : -1) *
       (1 - laneBlock * 0.7);
     if (tac.shotSel === "rim") driveU += 0.25;
     if (tac.shotSel === "three") driveU -= 0.2;
@@ -189,14 +219,33 @@ export function offenseDecide(): void {
     const passBias = G.possClock < 6 ? 0.5 : 0.1;
     let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass);
 
+    // post-up utility: a post threat near the basket can back down a weaker
+    // on-ball defender. The physical EDGE pits the handler's strength/mass/length
+    // against the defender's strength/mass and interior defense; utility scales
+    // with that edge AND the postUp tendency (coaching/PR3 already folded in).
+    const postDef = onBall;
+    let postEdge = 0;
+    let postU = -1;
+    if (postDef && dh <= POST_RANGE) {
+      postEdge =
+        bh.attr.strength + weightTerm(bh) + heightTerm(bh) -
+        (postDef.attr.strength + weightTerm(postDef) + postDef.attr.interiorD * 0.4);
+      postU =
+        Math.max(0, postEdge) * POST_EDGE_UTIL_MULT * tendencyFactor(tendencies.postUp) * POST_TEND_MULT;
+    }
+
     // low IQ adds noise to the choice
     const noise = ((99 - bh.attr.iq) / 99) * 0.6;
     shootU += randn() * noise;
     driveU += randn() * noise;
     passU += randn() * noise;
+    if (postU > 0) postU += randn() * noise;
 
-    const best = Math.max(shootU, driveU, passU);
-    if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6)) {
+    const best = Math.max(shootU, driveU, passU, postU);
+    if (best === postU && postU > 0) {
+      G.driving = false;
+      postUp(bh, postDef!, contest, postEdge);
+    } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6)) {
       G.driving = false;
       attemptShot(bh, type, contest, pts, mp);
     } else if (best === driveU) {
@@ -210,6 +259,24 @@ export function offenseDecide(): void {
       attemptShot(bh, type, contest, pts, mp);
     } // nothing better, just shoot
   }
+}
+
+/* Back-down post-up: a CLOSE shot whose make probability is bumped UP by the
+   handler's physical edge (clamped), with a foul-draw chance routed through the
+   normal beginFouled path so bigs get to the line. Determinism via chance(). */
+function postUp(bh: Player, d: Player, contest: number, edge: number): void {
+  bh.target = { x: bh.x, y: bh.y };
+  logEv(`${bh.name} backs down ${d.name} in the post`);
+  // physical foul-draw on the backdown -> trip to the line (no FGA on a miss).
+  const foulP = clamp(POST_FOUL_BASE + Math.max(0, edge) * POST_FOUL_EDGE_SLOPE, 0, POST_FOUL_CAP);
+  const base = makeProb(bh, "close", contest);
+  const bump = clamp(Math.max(0, edge) * POST_EDGE_MULT, 0, POST_EDGE_MAKE_CAP);
+  const mp = clamp(base + bump, 0.02, 0.97);
+  if (chance(foulP)) {
+    beginFouled(bh, "close", 2, chance(mp)); // and-one if the bumped look would have fallen
+    return;
+  }
+  attemptShot(bh, "close", contest, 2, mp);
 }
 
 function rimHelp(bh: Player, def: Player[], h: Point): number {
@@ -291,8 +358,11 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     const d = defByAssign.get(p);
     const cutFactor = tendencyFactor(effectiveTendencies(p).driveRim);
     const shooterBig = threat(p) < 0.34;
+    const postThreat = effectiveTendencies(p).postUp >= POST_OFFBALL_PIVOT;
     let home = spots[ob.spot] || spots[1];
     if (shooterBig) home = { x: h.x + dir * 4.5, y: ob.spot % 2 ? 17.5 : 32.5 }; // non-shooters play near the rim
+    // a high-postUp big posts up on the block so the pass logic can feed him
+    if (postThreat) home = { x: h.x + dir * 5, y: ob.spot % 2 ? 18.5 : 31.5 };
 
     // --- cut in progress ---
     if (ob.state === "cut") {

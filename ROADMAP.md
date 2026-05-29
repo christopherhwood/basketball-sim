@@ -65,10 +65,19 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
   to a player's tendencies, swapped in at the decision sites, with a `CoachingPanel` UI (six
   instructions per player: shot freedom, shot bias, playmaking, rebounding, steals, help).
   Neutral coaching is identity, so the golden digests are unchanged. CPU is uncoached.
-- **PR 5 — per-matchup defense.** Assignment overrides, double-teams, force-direction,
-  switch-all, and the matchup-grid UI (the new defensive mechanics).
-- **PR 6+ — depth.** Substitutions, fatigue and foul trouble, fuller transition game,
-  badges/traits, set plays / playbooks.
+- **PR 5a — physical game (done).** Split `handle` into `handleLeft`/`handleRight` (default
+  play uses the stronger hand; sets up weak-hand force-direction), added `weight`, wired
+  `weight`+`strength` into rebounding, and added a post-up mechanic driven by the `postUp`
+  tendency (strong/heavy/tall players back down a weaker defender for a close shot or foul).
+  Re-baselined goldens; stats stay realistic.
+- **PR 5b — per-matchup defense.** Assignment overrides, double-teams, force-direction
+  (reading the weak hand), switch-all, and the matchup-grid UI (showing height/weight).
+  Neutral by default.
+- **PR 6 — smarter off-ball movement.** Ball-reactive cuts/relocations, role-true spacing
+  (bigs inside, shooters on the arc), off-ball screens and hand-offs, continuity — the
+  foundation set plays will build on.
+- **PR 7+ — depth.** Set plays / playbooks, substitutions, fatigue and foul trouble, fuller
+  transition game, badges/traits.
 
 Every system ships with tests, so the suite stays a complete cross-language spec — serving
 both the "port later" and "open-source" goals.
