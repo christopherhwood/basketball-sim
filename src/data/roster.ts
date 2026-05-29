@@ -41,6 +41,7 @@ export function genPlayer(archKey: string, team: TeamSide, num: number): Player 
       attr[key] = clamp(Math.round(a.t[key] + randn() * 6), 25, 99);
     }
   }
+  p.tendencies = { ...ARCH[archKey].tend };
   p.name = namePool.pop() as string;
   return p;
 }
