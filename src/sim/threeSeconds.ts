@@ -2,7 +2,7 @@ import { DT } from "../core/constants.js";
 import { dist } from "../core/math.js";
 import { rules } from "../core/rules.js";
 import { G, defTeam, hoop, logEv, offTeam, players } from "../core/state.js";
-import { beginLiveTransition } from "./transition.js";
+import { beginScoreTransition } from "./transition.js";
 import type { Player, Point } from "../types.js";
 
 const LANE_MIN_Y = 17;
@@ -63,7 +63,8 @@ export function enforceThreeSeconds(): boolean {
         G.banner = { text: "OFFENSIVE 3 SECONDS", t: 100 };
         logEv(`${p.name} is called for offensive three seconds — turnover`, "to");
         resetThreeSecondTimers();
-        beginLiveTransition(def[0]);
+        // dead ball: the other team inbounds (same path as a shot-clock violation)
+        beginScoreTransition(true);
         return true;
       }
     }
