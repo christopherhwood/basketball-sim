@@ -3,6 +3,7 @@ import type { PlayerCoaching } from "../types.js";
 import { G } from "../core/state.js";
 import { useGameVersion } from "../app/useGame.js";
 import { playerCoaching, setPlayerCoaching } from "../coaching/coaching.js";
+import { PlayerInspector } from "./PlayerInspector.js";
 
 type CoachKey = keyof PlayerCoaching;
 
@@ -75,11 +76,14 @@ export function CoachingPanel(): React.JSX.Element {
   const roster = G.home;
   const [selected, setSelected] = useState<number>(roster[0]?.num ?? 0);
   const [active, setActive] = useState<PlayerCoaching>({ ...playerCoaching(selected) });
+  const [showStats, setShowStats] = useState(false);
 
   const selectPlayer = (num: number): void => {
     setSelected(num);
     setActive({ ...playerCoaching(num) });
   };
+
+  const selectedPlayer = roster.find((p) => p.num === selected) ?? roster[0];
 
   const choose = (set: CoachKey, v: string): void => {
     const updated: PlayerCoaching = { ...playerCoaching(selected), [set]: v };
@@ -107,7 +111,7 @@ export function CoachingPanel(): React.JSX.Element {
   );
 
   return (
-    <div className="card">
+    <div className="card coach-card">
       <h2>Coaching</h2>
       <div className="opts">
         {roster.map((p) => (
@@ -121,8 +125,16 @@ export function CoachingPanel(): React.JSX.Element {
           </button>
         ))}
       </div>
+      {selectedPlayer && (
+        <button type="button" className="scout-btn" onClick={() => setShowStats((s) => !s)}>
+          {showStats ? "hide attributes" : "view attributes"}
+        </button>
+      )}
       {offenseSegs.map(renderSeg)}
       {defenseSegs.map(renderSeg)}
+      {showStats && selectedPlayer && (
+        <PlayerInspector player={selectedPlayer} onClose={() => setShowStats(false)} />
+      )}
     </div>
   );
 }
