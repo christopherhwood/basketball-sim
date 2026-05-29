@@ -6,44 +6,10 @@ import { threat } from "./defense.js";
 import { attemptShot } from "./resolution.js";
 import { beginLiveTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
-import type { Player, Point, ShotType, Tactics } from "../types.js";
+import { nearestDef, makeProb, contestOf } from "./shot.js";
+import type { Player, Point, Tactics } from "../types.js";
 
 /* ---------- 4) OFFENSE AI ---------- */
-export function nearestDef(p: Player, def: Player[]): { d: Player | null; dd: number } {
-  let best: Player | null = null,
-    bd = 1e9;
-  for (const d of def) {
-    const dd = dist(p, d);
-    if (dd < bd) {
-      bd = dd;
-      best = d;
-    }
-  }
-  return { d: best, dd: bd };
-}
-
-export function makeProb(shooter: Player, type: ShotType, contest: number): number {
-  const base = { rim: 0.68, close: 0.5, mid: 0.44, three: 0.372 }[type];
-  const sk =
-    type === "rim" || type === "close"
-      ? shooter.attr.finishing
-      : type === "mid"
-        ? shooter.attr.mid
-        : shooter.attr.three;
-  let p = base + ((sk - 55) / 55) * 0.24; // shooting skill
-  const cpen = type === "rim" ? 0.15 : type === "three" ? 0.21 : 0.25;
-  p -= contest * cpen; // defender contest
-  p -= shooter.fatigue * 0.05;
-  return clamp(p, 0.02, 0.97);
-}
-
-export function contestOf(shooter: Player, def: Player[]): number {
-  const { d, dd } = nearestDef(shooter, def);
-  const prox = clamp(1 - dd / 9, 0, 1); // no real contest past ~9 ft
-  const skill = clamp((d ? d.attr.perimD : 50) / 95, 0, 1.05);
-  return clamp(prox * skill, 0, 1);
-}
-
 export function offenseDecide(): void {
   const off = offTeam(),
     def = defTeam(),
@@ -133,7 +99,7 @@ export function offenseDecide(): void {
   }
 }
 
-export function rimHelp(bh: Player, def: Player[], h: Point): number {
+function rimHelp(bh: Player, def: Player[], h: Point): number {
   // how protected is the rim right now (0..1)
   let v = 0;
   for (const d of def) {
@@ -143,7 +109,7 @@ export function rimHelp(bh: Player, def: Player[], h: Point): number {
 }
 
 /* primary action: pick & roll or motion, plus off-ball movement for everyone. */
-export function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
+function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   const dir = G.attackHoop === "R" ? -1 : 1;
   G.actionT += DT;
   const sp0 = spotsFor(G.attackHoop);
@@ -184,19 +150,22 @@ export function runAction(off: Player[], def: Player[], h: Point, tac: Tactics):
 /* Off-ball movement: relocation to open space, lane-clearing on drives,
    basket cuts with refill, and backdoor cuts against tight ball-side denial.
    This is what generates open looks against disciplined help defense. */
-export function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: Tactics): void {
+function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: Tactics): void {
   const bh = G.ball.holder;
   if (!bh) return;
   const spots = spotsFor(G.attackHoop);
   const driving = G.driving && dist(bh, h) < 20;
   const driveLow = bh.y < 25;
+  // index defenders by their assignment once (first match wins, matching find())
+  const defByAssign = new Map<Player, Player>();
+  for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
   for (const p of off) {
     if (p === bh) continue;
     if (tac.action === "pnr" && p.role === "screener") continue; // screener owned by pnr logic
     const ob = p.ob;
     if (!ob) continue;
     ob.t += DT;
-    const d = def.find((x) => x.assign === p);
+    const d = defByAssign.get(p);
     const shooterBig = threat(p) < 0.34;
     let home = spots[ob.spot] || spots[1];
     if (shooterBig) home = { x: h.x + dir * 4.5, y: ob.spot % 2 ? 17.5 : 32.5 }; // non-shooters play near the rim
@@ -270,7 +239,7 @@ export function offBallMove(off: Player[], def: Player[], h: Point, dir: number,
   }
 }
 
-export function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Player[]): Point {
+function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Player[]): Point {
   let best = spots[3],
     bs = -1e9;
   for (const s of spots) {
@@ -289,7 +258,7 @@ export function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Play
   return best;
 }
 
-export function startPass(from: Player, to: Player): void {
+function startPass(from: Player, to: Player): void {
   from.hasBall = false;
   G.ball.state = "pass";
   G.ball.holder = null;

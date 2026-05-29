@@ -138,7 +138,7 @@ export function tick(): void {
   moveAll();
 }
 
-export function endQuarter(): void {
+function endQuarter(): void {
   if (G.quarter >= 4) {
     G.over = true;
     logEv("— FINAL —", "sc");

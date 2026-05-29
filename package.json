@@ -9,13 +9,21 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sim": "tsx scripts/sim.ts"
+    "sim": "tsx scripts/sim.ts",
+    "doctor": "npx react-doctor@latest"
   },
   "dependencies": {
-    "ajv": "^8"
+    "ajv": "^8",
+    "react": "^19",
+    "react-dom": "^19"
   },
   "devDependencies": {
+    "@testing-library/react": "^16",
     "@types/node": "^25.9.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4",
+    "jsdom": "^25",
     "tsx": "^4.22.3",
     "typescript": "^5",
     "vite": "^6",

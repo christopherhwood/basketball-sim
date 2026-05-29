@@ -68,6 +68,7 @@ th,td{text-align:right;padding:3px 4px;border-bottom:1px solid var(--panel2)}
 th{color:var(--dim);font-weight:500;letter-spacing:.04em}
 td.name,th.name{text-align:left;color:var(--ink)}
 .away-tbl td.name{color:var(--away)} .home-tbl td.name{color:var(--home)}
+.box-label{font-size:12px;letter-spacing:.1em;margin-bottom:4px;text-transform:uppercase}
 .feed{height:150px;overflow:auto;font-size:11px;line-height:1.5;color:var(--dim)}
 .feed .ev{padding:1px 0;border-bottom:1px solid var(--panel2)}
 .feed .sc-ev{color:var(--good)} .feed .to-ev{color:var(--hot)}
