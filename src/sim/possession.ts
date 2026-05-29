@@ -7,6 +7,7 @@ import { offenseDecide } from "./offense.js";
 import { defenseMove } from "./defense.js";
 import { resolveShot, updateFreeThrows } from "./resolution.js";
 import { updateTransition, beginScoreTransition } from "./transition.js";
+import { enforceThreeSeconds, resetThreeSecondTimers } from "./threeSeconds.js";
 import type { HoopSide, Point, Player } from "../types.js";
 
 /* ---------- POSSESSION SETUP ----------
@@ -66,6 +67,7 @@ export function setupPossession(initial: boolean): void {
   players().forEach((p) => {
     p.target = { x: p.x, y: p.y };
   });
+  resetThreeSecondTimers();
 }
 
 /* ---------- 7) POSSESSION + CLOCK ---------- */
@@ -126,6 +128,7 @@ export function tick(): void {
     moveAll();
     return;
   }
+  if (enforceThreeSeconds()) return;
 
   if (G.shotClock <= 0 && G.ball.state === "held") {
     logEv(`shot clock violation — ${G.offense === "home" ? "YOU" : "CPU"} turn it over`, "to");

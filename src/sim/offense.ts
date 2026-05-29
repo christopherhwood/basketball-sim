@@ -98,7 +98,7 @@ const BIG_POST_PIVOT = POST_OFFBALL_PIVOT; // high postUp also marks an inside r
 const SCREENER_POP_THREE = 70; // a screening big only pops beyond the arc if shootThree above this
 
 // Inside home spots (relative to the attacking hoop), assigned to bigs so they
-// stop drifting to the arc. Two block/short-corner slots plus a dunker spot.
+// stop drifting to the arc. Homes are lane-adjacent; block touches are temporary.
 const INSIDE_X = 5; // ft from the hoop along the baseline axis for block spots
 const INSIDE_SHORT_X = 8.5; // short-corner depth
 const DUNKER_X = 4; // dunker-spot depth (rolled-screener reset / lone big)
@@ -113,6 +113,17 @@ const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right afte
 const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
 const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
+const TARGET_MIN_PERIMETER_DIST = 12; // classic motion spacing: keep perimeter slots a full gap apart
+const TARGET_MIN_INTERIOR_DIST = 7.5; // interior players can be closer, but not stacked
+const TARGET_MIN_MIXED_DIST = 9.5; // one inside / one perimeter needs a passing lane gap
+const HIGH_POST_MIN_DEPTH = 9; // relative to hoop: FT-line/high-post band starts here
+const HIGH_POST_MAX_DEPTH = 17;
+const HIGH_POST_MIN_Y = 17;
+const HIGH_POST_MAX_Y = 33;
+const LANE_CLEAR_WARN_T = 1.7;
+const LANE_CLEAR_LOW_IQ_EXTRA_T = 0.9;
+
+type ReservedTarget = { p: Player; point: Point; inside: boolean };
 
 /* ---------- 4) OFFENSE AI ---------- */
 export function offenseDecide(): void {
@@ -327,7 +338,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   if (tac.action === "pnr") {
     // pick the eligible big with the highest screen tendency; fall back to role/off[4]
     let screener = off.find((p) => p.role === "screener") || off[4];
-    let bestScreen = -1;
+    let bestScreen = screener === bh ? -1 : effectiveTendencies(screener).screen;
     for (const p of off) {
       if (p === bh) continue;
       const sc = effectiveTendencies(p).screen;
@@ -340,6 +351,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
       bh.target = { x: h.x + dir * 21, y: 25 };
       // come UP to the level of the screen from the interior, not from the arc
       screener.target = { x: h.x + dir * 13, y: 30 };
+      G.screen = { ball: bh, screener };
       if (G.possClock > 1.6) {
         G.actionPhase = "screen";
       }
@@ -357,12 +369,14 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
         screener.target = { x: h.x + dir * 22, y: 30 };
       } else if (rolled) {
         // reset to an inside spot once the roll arrives — do NOT jog back out to the arc
-        screener.target = { x: h.x + dir * DUNKER_X, y: 25 };
+        screener.target = legalInsideHome(screener, h, dir);
       } else {
-        screener.target = { x: h.x + dir * DUNKER_X, y: 25 };
+        screener.target = legalInsideHome(screener, h, dir);
       }
       G.screen = { ball: bh, screener };
     }
+    if (shouldClearLane(screener, h)) screener.target = laneClearSpot(screener, screener.target || screener, h, dir);
+    if (screener.target) screener.target = clampInteriorTarget(screener.target);
   } else {
     G.screen = null;
   }
@@ -377,6 +391,137 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
 function isInsidePlayer(p: Player): boolean {
   const t = effectiveTendencies(p);
   return t.shootThree < BIG_SHOOT_THREE_MAX || t.postUp >= BIG_POST_PIVOT;
+}
+
+function spacingAwareness(p: Player): number {
+  // IQ doubles as offensive awareness until a dedicated trait exists.
+  return clamp((p.attr.iq - 35) / 55, 0.35, 1.15);
+}
+
+function spacingMin(aInside: boolean, bInside: boolean): number {
+  if (aInside && bInside) return TARGET_MIN_INTERIOR_DIST;
+  if (!aInside && !bInside) return TARGET_MIN_PERIMETER_DIST;
+  return TARGET_MIN_MIXED_DIST;
+}
+
+function highPostBand(pt: Point, h: Point): boolean {
+  const depth = Math.abs(pt.x - h.x);
+  return depth >= HIGH_POST_MIN_DEPTH && depth <= HIGH_POST_MAX_DEPTH && pt.y >= HIGH_POST_MIN_Y && pt.y <= HIGH_POST_MAX_Y;
+}
+
+function paintBand(pt: Point, h: Point): boolean {
+  return Math.abs(pt.x - h.x) <= 13.75 && pt.y >= HIGH_POST_MIN_Y && pt.y <= HIGH_POST_MAX_Y;
+}
+
+function shouldClearLane(p: Player, h: Point): boolean {
+  if (!paintBand(p, h)) return false;
+  const awareness = spacingAwareness(p);
+  const warnAt = LANE_CLEAR_WARN_T + (1.15 - awareness) * LANE_CLEAR_LOW_IQ_EXTRA_T;
+  return (p.offLaneT ?? 0) >= warnAt;
+}
+
+function laneClearSpot(p: Player, home: Point, h: Point, dir: number): Point {
+  const side = p.y < 25 ? -1 : 1;
+  return { x: Math.max(home.x, h.x + dir * 14.5), y: side < 0 ? 13 : 37 };
+}
+
+function legalInsideHome(p: Player, h: Point, dir: number): Point {
+  const side = (p.ob?.spot ?? 0) % 2 === 0 ? 1 : -1;
+  const depth = (p.ob?.spot ?? 0) % 3 === 0 ? DUNKER_X : INSIDE_SHORT_X;
+  return { x: h.x + dir * depth, y: side < 0 ? 13 : 37 };
+}
+
+function clampTarget(pt: Point): Point {
+  return { x: clamp(pt.x, 3, COURT_L - 3), y: clamp(pt.y, 3, 47) };
+}
+
+function clampInteriorTarget(pt: Point): Point {
+  return { x: clamp(pt.x, 3, COURT_L - 3), y: clamp(pt.y, 8, 42) };
+}
+
+function dedupeSpots(spots: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const s of spots) {
+    if (!out.some((o) => Math.abs(o.x - s.x) < 0.1 && Math.abs(o.y - s.y) < 0.1)) out.push(s);
+  }
+  return out;
+}
+
+function targetScore(
+  p: Player,
+  candidate: Point,
+  preferred: Point,
+  reserved: ReservedTarget[],
+  def: Player[],
+  h: Point,
+  inside: boolean,
+): number {
+  const awareness = spacingAwareness(p);
+  let nearestDef = 16;
+  for (const d of def) nearestDef = Math.min(nearestDef, dist(d, candidate));
+
+  let score = nearestDef * 0.35 - dist(candidate, preferred) * 0.75;
+  for (const r of reserved) {
+    const gap = spacingMin(inside, r.inside);
+    const d = dist(candidate, r.point);
+    if (d < gap) score -= (gap - d) * (inside && r.inside ? 7 : 10) * awareness;
+    if (d < 2.5) score -= 90 * awareness;
+    if (highPostBand(candidate, h) && highPostBand(r.point, h)) score -= 55 * awareness;
+  }
+  return score;
+}
+
+function reserveAwareTarget(
+  p: Player,
+  preferred: Point,
+  options: Point[],
+  reserved: ReservedTarget[],
+  def: Player[],
+  h: Point,
+  inside: boolean,
+): Point {
+  const candidates = dedupeSpots([preferred, ...options]);
+  let best = candidates[0],
+    bestScore = -1e9;
+  for (const c of candidates) {
+    const score = targetScore(p, c, preferred, reserved, def, h, inside);
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+
+  let out: Point = { x: best.x, y: best.y };
+  const awareness = spacingAwareness(p);
+  for (const r of reserved) {
+    const gap = spacingMin(inside, r.inside);
+    const d = dist(out, r.point);
+    if (d >= gap) continue;
+    let ax = out.x - r.point.x,
+      ay = out.y - r.point.y,
+      mag = Math.hypot(ax, ay);
+    if (mag < 0.1) {
+      ax = 0;
+      ay = out.y < 8 ? 1 : out.y > 42 ? -1 : (p.ob?.spot ?? 0) % 2 === 0 ? 1 : -1;
+      mag = 1;
+    }
+    const push = (gap - d) * awareness;
+    out = { x: out.x + (ax / mag) * push, y: out.y + (ay / mag) * push };
+  }
+  if (highPostBand(out, h) && reserved.some((r) => highPostBand(r.point, h))) {
+    const side = out.y < 25 ? -1 : 1;
+    out.y += side * 5 * awareness;
+  }
+  out = inside ? clampInteriorTarget(out) : clampTarget(out);
+  if (inside) {
+    for (const r of reserved) {
+      if (dist(out, r.point) >= spacingMin(inside, r.inside)) continue;
+      out.y = out.y < 25 ? 37 : 13;
+      out = clampInteriorTarget(out);
+      break;
+    }
+  }
+  return out;
 }
 
 /* Off-ball movement: role-true spacing (bigs inside, shooters on the perimeter),
@@ -399,18 +544,19 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
   const movers: Player[] = [];
   for (const p of off) {
     if (p === bh) continue;
-    if (tac.action === "pnr" && p.role === "screener") continue; // screener owned by pnr logic
+    if (tac.action === "pnr" && (p.role === "screener" || G.screen?.screener === p)) continue; // screener owned by pnr logic
     movers.push(p);
   }
   const bigs = movers.filter(isInsidePlayer);
   // perimeter spots are all spotsFor slots except the handler slot (index 0)
   const perimeterSpots = [spots[1], spots[2], spots[3], spots[4]];
-  // inside spots: two blocks, a short corner, and the dunker spot
+  // inside homes stay adjacent to the lane; post threats flash to the block
+  // only while their lane timer is low.
   const insideSpots: Point[] = [
-    { x: h.x + dir * INSIDE_X, y: 18 }, // left block
-    { x: h.x + dir * INSIDE_X, y: 32 }, // right block
-    { x: h.x + dir * INSIDE_SHORT_X, y: 14 }, // short corner
-    { x: h.x + dir * DUNKER_X, y: 25 }, // dunker spot
+    { x: h.x + dir * INSIDE_SHORT_X, y: 13 }, // left short corner
+    { x: h.x + dir * INSIDE_SHORT_X, y: 37 }, // right short corner
+    { x: h.x + dir * DUNKER_X, y: 13 }, // left dunker-adjacent
+    { x: h.x + dir * DUNKER_X, y: 37 }, // right dunker-adjacent
   ];
   // stable assignment by the player's seeded spot index so it does not flip-flop
   const sortByObSpot = (a: Player, b: Player) => (a.ob?.spot ?? 0) - (b.ob?.spot ?? 0);
@@ -423,6 +569,13 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
   // index defenders by their assignment once (first match wins, matching find())
   const defByAssign = new Map<Player, Player>();
   for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
+  const reserved: ReservedTarget[] = [];
+  if (bh.target) reserved.push({ p: bh, point: bh.target, inside: false });
+  for (const p of off) {
+    if (p === bh || movers.includes(p) || !p.target) continue;
+    reserved.push({ p, point: p.target, inside: p.role === "screener" || isInsidePlayer(p) });
+  }
+  let laneCutReserved = movers.some((p) => p.ob?.state === "cut");
   for (const p of movers) {
     const ob = p.ob;
     if (!ob) continue;
@@ -434,11 +587,13 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     const postThreat = tend.postUp >= POST_OFFBALL_PIVOT;
     let home = homeOf.get(p) || spots[ob.spot] || spots[1];
     // a high-postUp big posts up on the block so the pass logic can feed him
-    if (postThreat) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 18 : 32 };
+    if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 18 : 32 };
+    const spacingOptions = inside ? insideSpots : perimeterSpots;
 
     // --- cut in progress ---
     if (ob.state === "cut") {
       p.target = { x: h.x + dir * 2.5, y: ob.cutY as number };
+      reserved.push({ p, point: p.target, inside: true });
       if (dist(p, { x: h.x, y: 25 }) < 5.5 || ob.t > 2.0) {
         ob.state = "fill";
         ob.t = 0;
@@ -451,8 +606,10 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       // refill the chosen open spot (an inside spot for bigs, a perimeter spot
       // for shooters); fall back to home if none was recorded
       const fillTo = ob.fill || home;
-      p.target = fillTo;
-      if (dist(p, fillTo) < 3 || ob.t > 2.6) {
+      p.target = reserveAwareTarget(p, fillTo, spacingOptions, reserved, def, h, inside);
+      ob.fill = p.target;
+      reserved.push({ p, point: p.target, inside });
+      if (dist(p, p.target) < 3 || ob.t > 2.6) {
         ob.state = "space";
         ob.t = 0;
       }
@@ -461,31 +618,56 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
 
     // --- spacing read ---
     let tgt: Point = { x: home.x, y: home.y };
-    if (driving) {
+    if (shouldClearLane(p, h)) {
+      tgt = laneClearSpot(p, home, h, dir);
+    } else if (driving) {
       // clear the strong side: if I'm on the drive side, relocate to the weak side
       // (this both opens the lane and sets up the kick-out)
       const onDriveSide = p.y < 25 === driveLow;
       if (onDriveSide && dist(p, h) < 19) tgt = { x: home.x, y: 50 - home.y };
     } else {
       // give-and-go: the player who just passed cuts hard to the rim
-      if (justPassed && p === passer && chance(GIVE_AND_GO_CHANCE * cutFactor)) {
+      if (!laneCutReserved && justPassed && p === passer && chance(GIVE_AND_GO_CHANCE * cutFactor)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 19 : 31;
+        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
+        reserved.push({ p, point: p.target, inside: true });
+        laneCutReserved = true;
         continue;
       }
       // backdoor vs tight ball-side denial (scaled by driveRim)
-      if (d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45 && chance(BACKDOOR_CHANCE * cutFactor)) {
+      if (
+        !laneCutReserved &&
+        d &&
+        dist(d, p) < 3.0 &&
+        dist(d, h) > dist(p, h) - 1 &&
+        threat(p) > 0.45 &&
+        chance(BACKDOOR_CHANCE * cutFactor)
+      ) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 20 : 30;
+        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
+        reserved.push({ p, point: p.target, inside: true });
+        laneCutReserved = true;
         continue;
       }
       // weak-side lift/fill into open space the moment the ball moves
       if (justPassed && p !== passer && chance(POST_REACT_CHANCE)) {
         ob.state = "fill";
         ob.t = 0;
-        ob.fill = mostOpenSpot(p, inside ? insideSpots : perimeterSpots, off, def);
+        ob.fill = reserveAwareTarget(
+          p,
+          mostOpenSpot(p, spacingOptions, off, def),
+          spacingOptions,
+          reserved,
+          def,
+          h,
+          inside,
+        );
+        p.target = ob.fill;
+        reserved.push({ p, point: p.target, inside });
         continue;
       }
       // relocate into open space: slide a few feet away from my own defender
@@ -500,32 +682,18 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         0,
         CUT_CHANCE_CAP,
       );
-      if (chance(cutChance)) {
+      if (!laneCutReserved && chance(cutChance)) {
         ob.state = "cut";
         ob.t = 0;
         ob.cutY = p.y < 25 ? 19 : 31;
+        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
+        reserved.push({ p, point: p.target, inside: true });
+        laneCutReserved = true;
         continue;
       }
     }
-    // maintain spacing from the nearest teammate
-    let nt: Player | null = null,
-      nd = 1e9;
-    for (const o of off) {
-      if (o === p || o === bh) continue;
-      const dd = dist(o, p);
-      if (dd < nd) {
-        nd = dd;
-        nt = o;
-      }
-    }
-    if (nt && nd < 8) {
-      const ax = p.x - nt.x,
-        ay = p.y - nt.y,
-        m = Math.hypot(ax, ay) || 1;
-      tgt.x += (ax / m) * 2;
-      tgt.y += (ay / m) * 2;
-    }
-    p.target = { x: clamp(tgt.x, 3, COURT_L - 3), y: clamp(tgt.y, 3, 47) };
+    p.target = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
+    reserved.push({ p, point: p.target, inside });
   }
 }
 

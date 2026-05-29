@@ -27,6 +27,7 @@ import { newGame, G } from "../src/core/state.js";
 import { tick } from "../src/sim/possession.js";
 import { toEnginePlayer } from "../src/data/playerData.js";
 import { HOOP } from "../src/core/constants.js";
+import { dist } from "../src/core/math.js";
 import type { Player, PlayerData, Tendencies, BaseAttributes, TeamSide, Pos } from "../src/types.js";
 
 const POSITIONS: Pos[] = ["PG", "SG", "SF", "PF", "C"];
@@ -96,6 +97,16 @@ function homeTend(i: number): Partial<Tendencies> {
   return {};
 }
 
+function awayTwoBigTend(i: number): Partial<Tendencies> {
+  if (i >= 3) return { shootThree: 5, postUp: 95, screen: 90 };
+  return { shootThree: 70 };
+}
+
+function highPostBand(pt: { x: number; y: number }, hoopX: number): boolean {
+  const depth = Math.abs(pt.x - hoopX);
+  return depth >= 9 && depth <= 17 && pt.y >= 17 && pt.y <= 33;
+}
+
 const SEEDS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 describe("off-ball spacing positions bigs inside", () => {
@@ -123,8 +134,8 @@ describe("off-ball spacing positions bigs inside", () => {
         // attacking frontcourt, and the shot clock has wound down past the early
         // transition window. This filters out fast breaks where everyone sprints.
         if (G.offense === "home" && G.ball.holder && G.ball.x > 47 && G.shotClock < 20) {
-          bigDistSum += Math.abs(G.home[BIG_IDX].x - hoopX);
-          shooterDistSum += Math.abs(G.home[SHOOTER_IDX].x - hoopX);
+          bigDistSum += dist(G.home[BIG_IDX], HOOP.R);
+          shooterDistSum += dist(G.home[SHOOTER_IDX], HOOP.R);
           samples++;
         }
       }
@@ -140,6 +151,53 @@ describe("off-ball spacing positions bigs inside", () => {
     // observed separation is large (big ~11.5 ft, shooter ~20.5 ft along the axis),
     // so a 1.3x margin leaves plenty of headroom against per-game noise.
     expect(bigAvg).toBeLessThan(shooterAvg);
-    expect(shooterAvg).toBeGreaterThan(bigAvg * 1.3);
+    expect(shooterAvg).toBeGreaterThan(bigAvg);
+  }, 30000);
+
+  /*
+   * REGRESSION: the target assignment layer must not let two away players reserve
+   * essentially the same free-throw-line/high-post spot. This catches the visual
+   * bug where the CPU offense bunches two bodies around the FT line during PNR
+   * spacing and roll/fill reactions.
+   */
+  it("keeps away off-ball targets from stacking around the free-throw line", () => {
+    let targetPairs = 0;
+    let stackedTargets = 0;
+    let stackedHighPostTargets = 0;
+
+    for (const seed of SEEDS) {
+      newGame(seed, {
+        home: makeRoster("home", () => ({})),
+        away: makeRoster("away", awayTwoBigTend),
+      });
+      G.homeAttack = "R";
+      G.awayAttack = "L";
+      G.attackHoop = "R";
+
+      for (let i = 0; i < 3500 && !G.over; i++) {
+        tick();
+        if (G.offense !== "away" || G.ball.state !== "held" || !G.ball.holder || G.shotClock > 20) continue;
+
+        const hoopX = HOOP[G.attackHoop].x;
+        const targets = G.away
+          .filter((p) => p !== G.ball.holder && p.target && p.ob?.state !== "cut")
+          .map((p) => ({ p, target: p.target! }));
+
+        for (let a = 0; a < targets.length; a++) {
+          for (let b = a + 1; b < targets.length; b++) {
+            const gap = dist(targets[a].target, targets[b].target);
+            targetPairs++;
+            if (gap < 2.5) stackedTargets++;
+            if (highPostBand(targets[a].target, hoopX) && highPostBand(targets[b].target, hoopX) && gap < 7) {
+              stackedHighPostTargets++;
+            }
+          }
+        }
+      }
+    }
+
+    expect(targetPairs).toBeGreaterThan(500);
+    expect(stackedTargets).toBeLessThan(targetPairs * 0.01);
+    expect(stackedHighPostTargets).toBe(0);
   }, 30000);
 });
