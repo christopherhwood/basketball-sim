@@ -75,3 +75,25 @@ td.name,th.name{text-align:left;color:var(--ink)}
 .hint{font-size:11px;color:var(--dim);line-height:1.5}
 .legend{display:flex;gap:14px;font-size:11px;color:var(--dim);margin-top:8px;flex-wrap:wrap}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:4px}
+
+/* coaching panel scouting popover */
+.coach-card{position:relative}
+.scout-btn{width:100%;margin:2px 0 12px;font-size:11px;color:var(--dim);background:var(--panel2);
+  border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
+.scout-btn:hover{color:var(--home);border-color:var(--home)}
+.popover{position:absolute;right:calc(100% + 12px);top:0;margin:0;width:300px;max-height:560px;overflow:auto;
+  color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;z-index:20;
+  box-shadow:0 10px 34px rgba(0,0,0,.55)}
+.popover h3{font-family:"Anton",sans-serif;font-weight:400;letter-spacing:.06em;font-size:16px;margin:0;color:var(--ink)}
+.popover-sub{color:var(--dim);font-size:11px;letter-spacing:.08em;margin:2px 0 6px;text-transform:uppercase}
+.popover-close{position:absolute;top:8px;right:10px;background:none;border:0;color:var(--dim);
+  font-size:18px;line-height:1;cursor:pointer;padding:2px 6px}
+.popover-close:hover{color:var(--away)}
+.stat-sec{color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin:12px 0 6px}
+.stat-grid{display:flex;flex-direction:column;gap:5px}
+.stat-row{display:grid;grid-template-columns:66px 1fr 22px;gap:8px;align-items:center;font-size:11px}
+.stat-label{color:var(--dim)}
+.stat-val{color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.stat-bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden}
+.stat-bar span{display:block;height:100%;background:var(--home);border-radius:3px}
+@media (max-width:980px){.popover{position:static;width:auto;right:auto;margin-top:12px;max-height:none}}
