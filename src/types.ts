@@ -40,6 +40,26 @@ export type Tendencies = {
   pushTransition: number;
 };
 
+export type ShotFreedom = "limited" | "normal" | "free";
+export type ShotBias = "rim" | "balanced" | "three";
+export type Playmaking = "score" | "balanced" | "facilitate";
+export type ReboundRole = "getback" | "balanced" | "crash";
+export type DefAggression = "safe" | "balanced" | "gamble";
+export type HelpRole = "stayhome" | "balanced" | "help";
+
+export type PlayerCoaching = {
+  shotFreedom: ShotFreedom;
+  shotBias: ShotBias;
+  playmaking: Playmaking;
+  reboundRole: ReboundRole;
+  aggression: DefAggression;
+  help: HelpRole;
+};
+
+export type Coaching = {
+  perPlayer: Record<number, PlayerCoaching>;
+};
+
 export type PlayerData = {
   name: string;
   number: number;

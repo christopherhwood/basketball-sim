@@ -1,7 +1,7 @@
 import { G, offTeam, defTeam, hoop } from "../core/state.js";
 import { dist, clamp, lerp } from "../core/math.js";
 import { tacFor } from "../tactics/tactics.js";
-import { tendenciesOf, tendencyFactor } from "./tendency.js";
+import { effectiveTendencies, tendencyFactor } from "./tendency.js";
 import type { Player, Tactics } from "../types.js";
 
 /* ---------- DEFENSE AI ---------- */
@@ -75,7 +75,7 @@ export function defenseMove(): void {
       // Scale help eagerness by the helper's helpDefense tendency (50 -> 1.0 neutral):
       // high helpDefense -> larger help radius and steps further toward the driver;
       // low helpDefense -> stays closer to his man.
-      const hf = tendencyFactor(tendenciesOf(helper).helpDefense);
+      const hf = tendencyFactor(effectiveTendencies(helper).helpDefense);
       const helpRadius = 14 * hf;
       const helpLerp = clamp(0.45 * hf, 0, 1);
       if (hd < helpRadius) helper.target = { x: lerp(ball.x, h.x, helpLerp), y: lerp(ball.y, h.y, helpLerp) };

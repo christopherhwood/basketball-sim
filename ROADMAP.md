@@ -60,9 +60,11 @@ app/           game loop + wiring; ticks engine, draws, routes UI input back in
   passing-lane steals, trimmed blocks, and tempered three-point volume — tuned to realistic
   ranges (TOV ~11–16, STL ~6–10, BLK ~4–6 per team/game) with a balance-floor guard test.
   Re-baselined the golden digests.
-- **PR 4b — per-player coaching.** A `Coaching` data model (team + per-player directives) +
-  a resolver that maps coaching into effective tendencies, wired into offense/defense, with
-  UI controls. Neutral coaching reproduces current behavior.
+- **PR 4b — per-player coaching (done).** A `Coaching` data model (per-player directives,
+  home team) + a resolver (`effectiveTendencies`) that applies coaching as additive deltas
+  to a player's tendencies, swapped in at the decision sites, with a `CoachingPanel` UI (six
+  instructions per player: shot freedom, shot bias, playmaking, rebounding, steals, help).
+  Neutral coaching is identity, so the golden digests are unchanged. CPU is uncoached.
 - **PR 5 — per-matchup defense.** Assignment overrides, double-teams, force-direction,
   switch-all, and the matchup-grid UI (the new defensive mechanics).
 - **PR 6+ — depth.** Substitutions, fatigue and foul trouble, fuller transition game,
