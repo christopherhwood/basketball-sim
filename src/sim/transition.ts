@@ -7,6 +7,29 @@ import { attemptShot } from "./resolution.js";
 import { effectiveTendencies } from "./tendency.js";
 import type { Player, Point } from "../types.js";
 
+const STEAL_REACTION_DELAY = 0.35;
+const FASTBREAK_RECOVERY_BASE = 0.16;
+const FASTBREAK_RECOVERY_SPEED_SLOPE = 0.012;
+const FASTBREAK_RECOVERY_DEF_SLOPE = 0.06;
+const FASTBREAK_RECOVERY_MIN = -0.08;
+const FASTBREAK_RECOVERY_MAX = 0.34;
+
+function recoveryQuality(d: Player): number {
+  return clamp((d.attr.iq * 0.45 + d.attr.perimD * 0.35 + d.attr.interiorD * 0.2 - 50) / 45, 0, 1);
+}
+
+export function fastBreakRecoveryTarget(d: Player, m: Player, atk: Point, onBall: boolean): Point {
+  const speedEdge = m.attr.speed - d.attr.speed;
+  const quality = recoveryQuality(d);
+  const base = onBall ? FASTBREAK_RECOVERY_BASE + 0.04 : FASTBREAK_RECOVERY_BASE;
+  const goalside = clamp(
+    base - speedEdge * FASTBREAK_RECOVERY_SPEED_SLOPE + quality * FASTBREAK_RECOVERY_DEF_SLOPE,
+    FASTBREAK_RECOVERY_MIN,
+    FASTBREAK_RECOVERY_MAX,
+  );
+  return { x: lerp(m.x, atk.x, goalside), y: lerp(m.y, atk.y, goalside * 0.75) };
+}
+
 /* ----- SCORE TRANSITION -----
    After a made basket: hold the ball at the rim briefly, the conceding team
    inbounds from under that basket, a guard advances it up the floor, then we
@@ -121,8 +144,9 @@ export function updateTransition(): void {
       // 50 is neutral (matches the current back<=1 / runway>18 threshold), high pushes
       // more (tolerates an extra defender back and a shorter runway), low pulls it out.
       const push = effectiveTendencies(tr.pg).pushTransition;
-      const backTol = push >= 75 ? 2 : push < 25 ? 0 : 1;
-      const runway = 18 - (push - 50) * 0.12;
+      const stealBoost = tr.stealStart ? 1 : 0;
+      const backTol = (push >= 75 ? 2 : push < 25 ? 0 : 1) + stealBoost;
+      const runway = 18 - (push - 50) * 0.12 - stealBoost * 3;
       tr.fastbreak = tr.kind === "live" && back <= backTol && dist(tr.pg, atk) > runway;
       if (tr.fastbreak) G.banner = { text: "FAST BREAK", t: 80 };
     }
@@ -138,8 +162,8 @@ export function updateTransition(): void {
       G.ball.from = tr.pg;
       def.forEach((d) => {
         const m = d.assign;
-        if (!m) return; // defenders race back goalside
-        d.target = { x: lerp(atk.x, m.x, 0.15), y: lerp(atk.y, m.y, 0.2) };
+        if (!m || (tr.stealStart && tr.t < STEAL_REACTION_DELAY)) return;
+        d.target = fastBreakRecoveryTarget(d, m, atk, m === tr.pg);
       });
       if (dist(tr.pg, atk) < 5.5) {
         // FINISH (open layup, or contested if a defender recovered)
@@ -167,10 +191,8 @@ export function updateTransition(): void {
     // so the on-ball defender is in front of the ball, not trailing behind it.
     def.forEach((d) => {
       const m = d.assign;
-      if (!m) return;
-      const onBall = m === tr.pg;
-      const t = onBall ? 0.22 : 0.3;
-      d.target = { x: lerp(m.x, atk.x, t), y: lerp(m.y, atk.y, t * 0.7) };
+      if (!m || (tr.stealStart && tr.t < STEAL_REACTION_DELAY)) return;
+      d.target = fastBreakRecoveryTarget(d, m, atk, m === tr.pg);
     });
     if (dist(tr.pg, top) < 6 || tr.t > 9) {
       settleHalfCourt(tr.pg);
@@ -209,7 +231,7 @@ function settleHalfCourt(pg: Player): void {
 /* ----- LIVE TRANSITION ----- steal / defensive rebound / shot-clock violation.
    No baseline inbound: the recovering team pushes the live ball up the floor.
    If the recoverer is not a guard, they outlet to the best ball handler first. */
-export function beginLiveTransition(recoverer: Player): void {
+export function beginLiveTransition(recoverer: Player, stealStart = false): void {
   G.offense = recoverer.team;
   G.attackHoop = recoverer.team === "home" ? G.homeAttack! : G.awayAttack!;
   G.pendingAssist = null;
@@ -234,12 +256,20 @@ export function beginLiveTransition(recoverer: Player): void {
     G.ball.holder = recoverer;
     G.ball.x = recoverer.x;
     G.ball.y = recoverer.y;
-    G.trans = { kind: "live", phase: "advance", t: 0, pg: recoverer };
+    G.trans = { kind: "live", phase: "advance", t: 0, pg: recoverer, stealStart };
   } else {
     G.ball.holder = null;
     G.ball.x = recoverer.x;
     G.ball.y = recoverer.y;
-    G.trans = { kind: "live", phase: "outlet", t: 0, pg: adv, from: { x: recoverer.x, y: recoverer.y }, outletFrom: recoverer };
+    G.trans = {
+      kind: "live",
+      phase: "outlet",
+      t: 0,
+      pg: adv,
+      from: { x: recoverer.x, y: recoverer.y },
+      outletFrom: recoverer,
+      stealStart,
+    };
   }
   G.ball.state = "transition";
 }

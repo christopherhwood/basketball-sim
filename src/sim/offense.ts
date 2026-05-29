@@ -215,7 +215,7 @@ export function offenseDecide(): void {
             onBallDef.stats.stl++;
             logEv(`${onBallDef.name} strips ${bh.name} — steal!`, "to");
             G.driving = false;
-            beginLiveTransition(onBallDef);
+            beginLiveTransition(onBallDef, true);
           } else {
             // lost ball / bad handle: nearest defender recovers (no STL credited)
             const recover = nearestDef(bh, def).d || onBallDef;
@@ -799,7 +799,8 @@ function startPass(from: Player, to: Player): void {
       from.stats.tov++;
       // nearest defender to the intended target recovers the loose ball
       let recover: Player | null = null,
-        rd = 1e9;
+        rd = 1e9,
+        creditedSteal = false;
       for (const d of def) {
         const dd = dist(d, to);
         if (dd < rd) {
@@ -816,6 +817,7 @@ function startPass(from: Player, to: Player): void {
         );
         if (chance(stealChance)) {
           recover.stats.stl++;
+          creditedSteal = true;
           logEv(`${recover.name} picks off the pass — steal!`, "to");
         } else {
           logEv(`${from.name} throws it away — turnover`, "to");
@@ -823,7 +825,7 @@ function startPass(from: Player, to: Player): void {
       } else {
         logEv(`${from.name} throws it away — turnover`, "to");
       }
-      if (recover) beginLiveTransition(recover);
+      if (recover) beginLiveTransition(recover, creditedSteal);
       return;
     }
   }
@@ -846,7 +848,7 @@ function startPass(from: Player, to: Player): void {
         d.stats.stl++;
         from.stats.tov++;
         logEv(`${d.name} jumps the passing lane — steal!`, "to");
-        beginLiveTransition(d);
+        beginLiveTransition(d, true);
         return;
       }
     }
