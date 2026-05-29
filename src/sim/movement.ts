@@ -10,6 +10,12 @@ export function maxSpeed(p: Player): number {
   return (10 + ((p.attr.speed - 50) / 50) * 8) * (1 - p.fatigue * 0.18);
 }
 
+// Arrive tuning: within ARRIVE_SLOW_R the desired speed ramps linearly to zero;
+// inside ARRIVE_STOP_R the player is treated as arrived. Replaces a hard 0.6 ft
+// dead-zone that let fast movers overshoot and oscillate.
+const ARRIVE_SLOW_R = 4.0; // ft: begin decelerating within this radius
+const ARRIVE_STOP_R = 0.3; // ft: zero desired speed inside this
+
 export function moveAll(): void {
   for (const p of players()) {
     if (!p.target) {
@@ -20,12 +26,20 @@ export function moveAll(): void {
       const dx = p.target.x - p.x,
         dy = p.target.y - p.y,
         d = Math.hypot(dx, dy) || 1;
-      const desv = d < 0.6 ? 0 : ms; // arrive: stop near target
+      // Arrive: ramp the desired speed down within a slowing radius so a fast
+      // player decelerates INTO the target instead of blowing past the old hard
+      // 0.6 ft dead-zone and reversing every tick (the visible wobble).
+      const desv = d < ARRIVE_STOP_R ? 0 : ms * Math.min(1, d / ARRIVE_SLOW_R);
       const dvx = (dx / d) * desv,
         dvy = (dy / d) * desv,
         acc = ms * 4;
       p.vx += clamp(dvx - p.vx, -acc * DT, acc * DT);
       p.vy += clamp(dvy - p.vy, -acc * DT, acc * DT);
+      // bleed residual velocity right at the target to kill micro-oscillation
+      if (d < ARRIVE_STOP_R * 2) {
+        p.vx *= 0.5;
+        p.vy *= 0.5;
+      }
     }
     p.x = clamp(p.x + p.vx * DT, 1, COURT_L - 1);
     p.y = clamp(p.y + p.vy * DT, 1, COURT_W - 1);
