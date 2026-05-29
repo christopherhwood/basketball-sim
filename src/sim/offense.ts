@@ -118,8 +118,38 @@ const PASS_RISK_ENTRY_FROM_DEPTH = 12;
 const PASS_RISK_ENTRY_WIDTH = 8;
 const PASS_RISK_CORNER_Y = 8;
 
+// Drive-read: speed/handle edge and defender positioning bonuses
+const DRIVE_SPEED_SLOPE = 1 / 28; // per point of (handler speed - defender speed)
+const DRIVE_HANDLE_SLOPE = 1 / 32; // per point of (handler handle - defender perimD)
+const DRIVE_IQ_SLOPE = 1 / 60; // per point of defender iq deficit (vs 70 pivot)
+const DRIVE_IQ_PIVOT = 70; // low-iq defenders get driven more
+const DRIVE_LAG_BONUS = 0.55; // flat bonus when the on-ball defender is tracking-lagged
+const DRIVE_LAG_DIST_THRESHOLD = 3.5; // ft: defender is "lagging" if his target is this far from handler
+const DRIVE_TIGHT_HANDLE_FLOOR = 58; // handle threshold below which a tight defender suppresses drives
+const DRIVE_TIGHT_BONUS = 0.35; // bonus when the handler can beat a tight defender (handle above floor)
+const DRIVE_SCREEN_BONUS = 0.45; // extra drive utility off a PnR screen (coming off the pick)
+const DRIVE_BASE_DIST_MIN = 6; // handler must be outside this range from the hoop to drive
+const DRIVE_CONTINUATION_BONUS = 0.22; // extra drive utility when already mid-drive (keep attacking)
+
+// Open-lane check: no defender in the corridor between handler and rim
+const OPEN_LANE_CORRIDOR_WIDTH = 4.5; // ft half-width of the lane corridor
+const OPEN_LANE_BONUS = 2.0; // drive-utility bonus when the lane is clear
+const OPEN_LANE_MIN_DIST = 8; // only meaningful when handler is this far from the hoop
+
+// Drive-and-kick: when help defense commits to a drive, pass to the open man
+const DRIVE_KICK_HELP_DIST = 12; // a help defender must be within this of the driver
+const DRIVE_KICK_OPEN_BONUS = 2.4; // pass-utility bonus for the kick-out target
+const DRIVE_KICK_MIN_HANDLER_DIST = 14; // handler must be this far in to trigger kick consideration
+const DRIVE_KICK_PASS_SLOPE = 1 / 30; // per point of passer pass attribute (above 50) boosts kick
+
+// Post-feed: when a teammate is posting with a position edge, the handler feeds him
+const POST_FEED_RANGE = 14; // ft to the hoop: a big this close can be fed
+const POST_FEED_EDGE_MIN = 4; // minimum physical edge for a feed to be attractive
+const POST_FEED_PASS_BONUS = 1.6; // pass-utility bonus when feeding a posting big
+const POST_FEED_TEND_PIVOT = 70; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
+
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
-const THREE_UTILITY_MULT = 0.85; // scales three-shoot utility; high-shootThree still out-shoots low
+const THREE_UTILITY_MULT = 0.78; // scales three-shoot utility; high-shootThree still out-shoots low
 // Controls how strongly the shootThree tendency swings three volume: 1 = full
 // (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
 // visible after route-risk tuning removes some easy pass-first outcomes.
@@ -127,18 +157,18 @@ const THREE_TEND_COMPRESS = 1.1;
 // Flat additive bump to open three-point utility. Lifts low-three teams toward
 // the 3PA floor WITHOUT scaling up high-volume teams (they are already shooting),
 // so it tightens the floor without pushing the pace-and-space ceiling over.
-const THREE_UTILITY_FLOOR = 1.85;
+const THREE_UTILITY_FLOOR = 1.65;
 
 // Post-up mechanic (adds close buckets + free throws for bigs). A post threat
 // near the basket with a physical edge over his on-ball defender backs him down.
 const POST_RANGE = 12; // ft to the hoop within which a post-up is available
-const POST_EDGE_UTIL_MULT = 0.05; // converts physical edge -> base post-up utility
-const POST_TEND_MULT = 1.4; // scales post-up utility by the postUp tendency factor
+const POST_EDGE_UTIL_MULT = 0.07; // converts physical edge -> base post-up utility
+const POST_TEND_MULT = 1.7; // scales post-up utility by the postUp tendency factor
 const POST_EDGE_MULT = 0.012; // make-prob bump per point of physical edge
 const POST_EDGE_MAKE_CAP = 0.16; // ceiling on the make-prob bump from the edge
-const POST_FOUL_BASE = 0.12; // baseline foul-draw chance on a backdown
-const POST_FOUL_EDGE_SLOPE = 0.006; // extra foul-draw chance per point of edge
-const POST_FOUL_CAP = 0.32; // ceiling on post-up foul-draw chance
+const POST_FOUL_BASE = 0.24; // baseline foul-draw chance on a backdown
+const POST_FOUL_EDGE_SLOPE = 0.010; // extra foul-draw chance per point of edge
+const POST_FOUL_CAP = 0.52; // ceiling on post-up foul-draw chance
 const POST_OFFBALL_PIVOT = 70; // postUp tendency at/above which a big posts on the block off-ball
 
 /* ---------- OFF-BALL ROLE + MOTION TUNING ----------
@@ -274,17 +304,62 @@ export function offenseDecide(): void {
       shootU *= tendencyFactor(shootTend);
     }
 
-    // drive utility: open lane + handle vs man, value of getting to rim
+    // drive utility: open lane + handle/speed edge vs man, defender lag, low-iq defender
     const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
     const laneBlock = rimHelp(bh, def, h);
-    let driveU =
-      (dh > 6 ? clamp((handleOf(bh) - (onBall ? onBall.attr.perimD : 50)) / 40, -0.3, 0.6) + 0.45 : -1) *
-      (1 - laneBlock * 0.7);
+    let driveU = -1;
+    if (dh > DRIVE_BASE_DIST_MIN) {
+      const defPerimD = onBall ? onBall.attr.perimD : 50;
+      const defSpeed = onBall ? onBall.attr.speed : 50;
+      const defIq = onBall ? onBall.attr.iq : 70;
+      const handleEdge = (handleOf(bh) - defPerimD) * DRIVE_HANDLE_SLOPE;
+      const speedEdge = (bh.attr.speed - defSpeed) * DRIVE_SPEED_SLOPE;
+      const iqBonus = Math.max(0, DRIVE_IQ_PIVOT - defIq) * DRIVE_IQ_SLOPE;
+
+      // defender lag: if the on-ball defender's target is far from the handler,
+      // he is closing out or caught off-guard — advantageous for the driver
+      let lagBonus = 0;
+      if (onBall && onBall.target) {
+        const defLag = dist(onBall.target, bh);
+        if (defLag > DRIVE_LAG_DIST_THRESHOLD) lagBonus = DRIVE_LAG_BONUS;
+      }
+
+      // tight defender with a handle advantage: the defender presses up but the
+      // handler has enough skill to blow by him
+      let tightBonus = 0;
+      if (tac.pressure === "tight" && handleOf(bh) >= DRIVE_TIGHT_HANDLE_FLOOR) {
+        tightBonus = DRIVE_TIGHT_BONUS;
+      }
+
+      // off-screen bonus: coming off the PnR pick the handler gets a step on his man
+      const offScreenBonus = G.screen && G.screen.ball === bh && dist(bh, G.screen.screener) < 6
+        ? DRIVE_SCREEN_BONUS
+        : 0;
+
+      const continuationBonus = G.driving ? DRIVE_CONTINUATION_BONUS : 0;
+      driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + offScreenBonus + continuationBonus)
+        * (1 - laneBlock * 0.7);
+    }
+
+    // open-lane bonus: no defender in the corridor between the handler and the hoop
+    if (dh > OPEN_LANE_MIN_DIST) {
+      const laneOpen = isLaneClear(bh, def, h);
+      if (laneOpen) driveU += OPEN_LANE_BONUS;
+    }
+
     if (tac.shotSel === "rim") driveU += 0.25;
     if (tac.shotSel === "three") driveU -= 0.2;
     driveU *= tendencyFactor(tendencies.driveRim);
 
     // pass utility: find best teammate (more open / better look)
+    // Also checks for drive-and-kick targets (open man after help commits)
+    // and post-feed targets (posting big with a position edge).
+    const driveKickActive = G.driving && dh < DRIVE_KICK_MIN_HANDLER_DIST
+      && helpCommittedToDriver(bh, def, h);
+    const kickPassBonus = driveKickActive
+      ? DRIVE_KICK_OPEN_BONUS * clamp((bh.attr.pass - 50) * DRIVE_KICK_PASS_SLOPE + 1, 0.7, 1.5)
+      : 0;
+
     let bestPass: Player | null = null,
       bestPU = -1;
     for (const t of off) {
@@ -294,8 +369,20 @@ export function offenseDecide(): void {
       const td = dist(t, h),
         tt = shotTypeFor(td);
       const tev = makeProb(t, tt, tc) * (tt === "three" ? 3 : 2);
-      const advance = dist(t, h) < dh - 2 ? 0.3 : 0; // reward feeding closer looks
-      const pu = to * 0.9 + tev * 0.5 + advance - passSelectionPenalty(bh, t, h);
+      const advance = td < dh - 2 ? 0.3 : 0; // reward feeding closer looks
+
+      // drive-and-kick: if help has committed, the player whose defender helped is open
+      let kickBonus = 0;
+      if (driveKickActive) {
+        const tDef = def.find((d) => d.assign === t);
+        if (tDef && isHelping(tDef, bh, h)) kickBonus = kickPassBonus;
+      }
+
+      // post-feed: a teammate posting near the basket with a physical edge earns a bonus
+      const postFeedBonus = postFeedValue(t, def, h);
+
+      const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus
+        - passSelectionPenalty(bh, t, h);
       if (pu > bestPU) {
         bestPU = pu;
         bestPass = t;
@@ -336,7 +423,7 @@ export function offenseDecide(): void {
       attemptShot(bh, type, contest, pts, mp);
     } else if (best === driveU) {
       G.driving = true;
-      bh.target = { x: lerp(bh.x, h.x, 0.5), y: lerp(bh.y, h.y, 0.4) };
+      bh.target = { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.60) };
     } else if (bestPass) {
       G.driving = false;
       startPass(bh, bestPass);
@@ -363,6 +450,60 @@ function postUp(bh: Player, d: Player, contest: number, edge: number): void {
     return;
   }
   attemptShot(bh, "close", contest, 2, mp);
+}
+
+/* Returns true when no defender lies within the lane corridor between the
+   ball-handler and the hoop. The corridor is a strip OPEN_LANE_CORRIDOR_WIDTH
+   ft wide centered on the direct path to the basket. */
+function isLaneClear(bh: Player, def: Player[], h: Point): boolean {
+  for (const d of def) {
+    if (d.assign === bh) continue; // on-ball defender is expected to be there
+    const dx = h.x - bh.x,
+      dy = h.y - bh.y,
+      len = Math.hypot(dx, dy);
+    if (len < 0.1) continue;
+    const ux = dx / len,
+      uy = dy / len;
+    const tx = d.x - bh.x,
+      ty = d.y - bh.y;
+    const along = tx * ux + ty * uy;
+    if (along < 0 || along > len) continue; // outside handler-to-hoop segment
+    const perp = Math.abs(tx * uy - ty * ux);
+    if (perp < OPEN_LANE_CORRIDOR_WIDTH) return false;
+  }
+  return true;
+}
+
+/* Returns true when a help defender has stepped toward the driving ball-handler
+   (i.e., the driver has drawn help, opening a kick-out target). */
+function helpCommittedToDriver(bh: Player, def: Player[], h: Point): boolean {
+  for (const d of def) {
+    if (d.assign === bh) continue;
+    if (dist(d, bh) < DRIVE_KICK_HELP_DIST) return true;
+  }
+  return false;
+}
+
+/* Returns true when a given defender has left his man to help on the driver.
+   Used to identify which offensive player is now open for the kick-out. */
+function isHelping(d: Player, driver: Player, h: Point): boolean {
+  return dist(d, driver) < DRIVE_KICK_HELP_DIST && (!d.assign || dist(d, d.assign) > 5);
+}
+
+/* Returns the pass-utility bonus for feeding a teammate who is posting up near
+   the basket with a meaningful physical edge over his on-ball defender. */
+function postFeedValue(t: Player, def: Player[], h: Point): number {
+  const td = dist(t, h);
+  if (td > POST_FEED_RANGE) return 0;
+  const tend = effectiveTendencies(t);
+  if (tend.postUp < POST_FEED_TEND_PIVOT) return 0;
+  const tDef = def.find((d) => d.assign === t);
+  if (!tDef) return 0;
+  const edge =
+    t.attr.strength + weightTerm(t) + heightTerm(t) -
+    (tDef.attr.strength + weightTerm(tDef) + tDef.attr.interiorD * 0.4);
+  if (edge < POST_FEED_EDGE_MIN) return 0;
+  return POST_FEED_PASS_BONUS * tendencyFactor(tend.postUp);
 }
 
 function rimHelp(bh: Player, def: Player[], h: Point): number {

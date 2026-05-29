@@ -85,6 +85,7 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
       );
       if (chance(bp)) {
         sh.stats.fga++;
+        sh.stats.rimFga++;
         if ((type as ShotType) === "three") sh.stats.tpa++;
         if ("stats" in prot) prot.stats.blk++;
         logEv(`${(prot as Player).name} BLOCKS ${sh.name} at the rim!`, "to");
@@ -100,6 +101,7 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
   }
   // normal field-goal attempt
   sh.stats.fga++;
+  if (type === "rim" || type === "close") sh.stats.rimFga++;
   if (type === "three") sh.stats.tpa++;
   G.ball.state = "shot";
   G.ball.holder = null;
@@ -291,6 +293,7 @@ export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boo
   if (andOne) {
     // shot fell + foul: count bucket + 1 FT
     sh.stats.fga++;
+    if (type === "rim" || type === "close") sh.stats.rimFga++;
     sh.stats.fgm++;
     if (type === "three") sh.stats.tpm++;
     sh.stats.pts += pts;
