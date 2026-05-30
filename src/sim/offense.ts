@@ -195,6 +195,11 @@ const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right afte
 const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
 const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
+const SCREEN_CHANCE = 0.004; // per tick: chance an eligible off-ball player enters screen state
+const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
+const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
+const SCREEN_TRIGGER_DIST = 4; // ft: screener must be within this of the defender to count as set
+
 const SPACE_DWELL_MIN = 1.5; // seconds a player holds its spot after each relocation before re-evaluating
 const RETARGET_MIN_SHIFT = 2.5; // ft: ignore retarget if new target is closer than this to current
 const TARGET_MIN_PERIMETER_DIST = 12; // classic motion spacing: keep perimeter slots a full gap apart
@@ -336,10 +341,15 @@ export function offenseDecide(): void {
         tightBonus = DRIVE_TIGHT_BONUS;
       }
 
-      // off-screen bonus: coming off the PnR pick the handler gets a step on his man
-      const offScreenBonus = G.screen && G.screen.ball === bh && dist(bh, G.screen.screener) < 6
-        ? DRIVE_SCREEN_BONUS
-        : 0;
+      // off-screen bonus: any teammate physically near the on-ball defender
+      const offScreenBonus = (() => {
+        if (!onBall) return 0;
+        for (const o of off) {
+          if (o === bh) continue;
+          if (dist(o, onBall) < 4) return DRIVE_SCREEN_BONUS;
+        }
+        return 0;
+      })();
 
       const continuationBonus = G.driving ? DRIVE_CONTINUATION_BONUS : 0;
       driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + offScreenBonus + continuationBonus)
@@ -775,6 +785,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
   }
   let laneCutReserved = movers.some((p) => p.ob?.state === "cut");
   let driveRelocationUsed = false;
+  const screenReserved = movers.some((p) => p.ob?.state === "screen");
   for (const p of movers) {
     const ob = p.ob;
     if (!ob) continue;
@@ -809,6 +820,28 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       ob.fill = p.target;
       reserved.push({ p, point: p.target, inside });
       if (dist(p, p.target) < 3 || ob.t > 2.6) {
+        ob.state = "space";
+        ob.t = 0;
+      }
+      continue;
+    }
+
+    // --- screen in progress ---
+    if (ob.state === "screen") {
+      if (ob.screenTarget) {
+        p.target = ob.screenTarget;
+        reserved.push({ p, point: p.target, inside: true });
+        if (G.driving) {
+          ob.state = "cut";
+          ob.t = 0;
+          ob.cutY = bh.y < 25 ? 19 : 31;
+          ob.screenTarget = null;
+        } else if (ob.t > SCREEN_HOLD_MAX) {
+          ob.state = "space";
+          ob.t = 0;
+          ob.screenTarget = null;
+        }
+      } else {
         ob.state = "space";
         ob.t = 0;
       }
@@ -896,6 +929,38 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         const away = Math.sign(p.y - d.y) || 1;
         tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
       }
+      // screener intent: an eligible off-ball player moves to set a screen on the on-ball defender
+      if (!screenReserved && !laneCutReserved) {
+        const onBallDef = def.find((d) => d.assign === bh);
+        if (
+          onBallDef &&
+          (effectiveTendencies(p).driveRim > 50 || p.attr.iq > 55) &&
+          chance(SCREEN_CHANCE)
+        ) {
+          const hx = bh.x - h.x;
+          const hy = bh.y - h.y;
+          const hlen = Math.hypot(hx, hy) || 1;
+          const ux = hx / hlen;
+          const uy = hy / hlen;
+          let perpX = -uy;
+          let perpY = ux;
+          if ((p.y - onBallDef.y) * perpY + (p.x - onBallDef.x) * perpX < 0) {
+            perpX = -perpX;
+            perpY = -perpY;
+          }
+          const screenPt: Point = {
+            x: clamp(onBallDef.x + perpX * SCREEN_SET_DIST, 3, COURT_L - 3),
+            y: clamp(onBallDef.y + perpY * SCREEN_SET_DIST, 3, 47),
+          };
+          ob.state = "screen";
+          ob.t = 0;
+          ob.screenTarget = screenPt;
+          p.target = screenPt;
+          reserved.push({ p, point: p.target, inside: true });
+          continue;
+        }
+      }
+
       // ball-reactive basket cut: base rate scaled by driveRim, with bonuses
       // the tick a pass is caught and early in the shot clock.
       const cutChance = clamp(
