@@ -198,7 +198,7 @@ const POST_FEED_SMOTHER_R = 5.5; // ft: a 2nd defender this close to the post ma
 const POST_FEED_TEND_PIVOT = 45; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
 
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
-const THREE_UTILITY_MULT = 1.2; // scales three-shoot utility; raised so 3PAr stays ~30% after early-clock shot patience trims volume
+const THREE_UTILITY_MULT = 1.12; // slightly trimmed from 1.2
 // Controls how strongly the shootThree tendency swings three volume: 1 = full
 // (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
 // visible after route-risk tuning removes some easy pass-first outcomes.
@@ -206,7 +206,7 @@ const THREE_TEND_COMPRESS = 1.1;
 // Flat additive bump to open three-point utility. Lifts low-three teams toward
 // the 3PA floor WITHOUT scaling up high-volume teams (they are already shooting),
 // so it tightens the floor without pushing the pace-and-space ceiling over.
-const THREE_UTILITY_FLOOR = 1.65;
+const THREE_UTILITY_FLOOR = 1.5;
 
 // Post-up mechanic (adds close buckets + free throws for bigs). A post threat
 // near the basket with a physical edge over his on-ball defender backs him down.
@@ -285,7 +285,6 @@ const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/
 const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
 const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
-const SF_SCREEN_MIN = 55; // an SF only enters the ball-screen pool if his screen tendency is at least this
 const SCREEN_CHANCE = 0.004; // per tick: chance an eligible off-ball player enters screen state
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
 const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
@@ -945,35 +944,6 @@ function rimHelp(bh: Player, def: Player[], h: Point): number {
   return clamp(v, 0, 1);
 }
 
-/* Is this player an eligible ball-screen setter? Bigs (C/PF) always; an SF only
-   if he's genuinely a screen-setter. Guards never screen the ball in this set. */
-function screenerEligible(p: Player, bh: Player): boolean {
-  if (p === bh) return false;
-  if (p.pos === "C" || p.pos === "PF") return true;
-  if (p.pos === "SF" && effectiveTendencies(p).screen >= SF_SCREEN_MIN) return true;
-  return false;
-}
-
-/* This possession's ball-screen setter: a screen-tendency-weighted random draw
-   among the eligible bigs (C sets most, PF a good share, a screen-happy SF rarely)
-   — not the single highest-tendency big every time. Falls back to the highest
-   non-handler if no big qualifies. */
-function chooseScreener(off: Player[], bh: Player): Player {
-  const cands = off.filter((p) => screenerEligible(p, bh));
-  if (cands.length === 0) {
-    return off
-      .filter((p) => p !== bh)
-      .reduce((b, p) => (effectiveTendencies(p).screen > effectiveTendencies(b).screen ? p : b));
-  }
-  const weights = cands.map((p) => Math.max(1, effectiveTendencies(p).screen));
-  let r = rng() * weights.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < cands.length; i++) {
-    r -= weights[i];
-    if (r <= 0) return cands[i];
-  }
-  return cands[cands.length - 1];
-}
-
 /* primary action: pick & roll or motion, plus off-ball movement for everyone. */
 function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   const dir = G.attackHoop === "R" ? -1 : 1;
@@ -987,14 +957,16 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   }
 
   if (tac.action === "pnr") {
-    // Pick the screener ONCE per possession and reuse it — rotating among the bigs
-    // (C/PF, rarely a screen-happy SF) weighted by screen tendency, so it isn't the
-    // same man every time. Safe now that a non-screening big still gets off-ball
-    // movement (no orphan camped in the lane) and a stranded big hands it back.
-    let screener = G.screenerPick && off.includes(G.screenerPick) && G.screenerPick !== bh ? G.screenerPick : null;
-    if (!screener) {
-      screener = chooseScreener(off, bh);
-      G.screenerPick = screener;
+    // pick the eligible big with the highest screen tendency; fall back to role/off[4]
+    let screener = off.find((p) => p.role === "screener") || off[4];
+    let bestScreen = screener === bh ? -1 : effectiveTendencies(screener).screen;
+    for (const p of off) {
+      if (p === bh) continue;
+      const sc = effectiveTendencies(p).screen;
+      if (sc > bestScreen) {
+        bestScreen = sc;
+        screener = p;
+      }
     }
     if (G.actionPhase === "bringup") {
       bh.target = { x: h.x + dir * 21, y: 25 };
