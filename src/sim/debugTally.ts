@@ -55,21 +55,21 @@ export function getDecisions(): typeof decisions {
 type TOKind = "strip" | "cutoff" | "badpass" | "lane" | "threesec";
 type TOZone = "rim" | "post" | "mid" | "perim";
 const tos: Record<TOKind, number> = { strip: 0, cutoff: 0, badpass: 0, lane: 0, threesec: 0 };
-type TOEntry = { kind: TOKind; name: string; pos: string; handle: number; zone: TOZone };
+type TOEntry = { kind: TOKind; name: string; pos: string; handle: number; zone: TOZone; intent: string };
 const toLog: TOEntry[] = [];
 
 /* Records a turnover with context: which player committed it (the ball-handler
    for strip/cutoff, the passer for badpass/lane), his position + ball skill, and
    the court zone he was in (distance from the rim he's attacking). Lets us see
    exactly WHO is coughing it up, WHERE, and on what kind of play. */
-export function recordTO(kind: TOKind, p?: Player, dh?: number): void {
+export function recordTO(kind: TOKind, p?: Player, dh?: number, intent?: string): void {
   if (!ENABLED) return;
   tos[kind]++;
   if (!p) return;
   const handle = Math.max(p.attr.handleLeft, p.attr.handleRight);
   const d = dh ?? 99;
   const zone: TOZone = d < 4 ? "rim" : d < 12 ? "post" : d < 20 ? "mid" : "perim";
-  toLog.push({ kind, name: p.name, pos: p.pos, handle, zone });
+  toLog.push({ kind, name: p.name, pos: p.pos, handle, zone, intent: intent ?? "?" });
 }
 export function getTOs(): typeof tos {
   return tos;
@@ -81,6 +81,7 @@ export function getTOReport() {
   const byPlayer = new Map<string, { count: number; pos: string; handle: number }>();
   const byZone: Record<TOZone, number> = { rim: 0, post: 0, mid: 0, perim: 0 };
   const byKindZone = new Map<string, number>();
+  const threeSecByIntent = new Map<string, number>();
   for (const e of toLog) {
     const r = byPlayer.get(e.name) ?? { count: 0, pos: e.pos, handle: e.handle };
     r.count++;
@@ -88,8 +89,9 @@ export function getTOReport() {
     byZone[e.zone]++;
     const k = `${e.kind}:${e.zone}`;
     byKindZone.set(k, (byKindZone.get(k) ?? 0) + 1);
+    if (e.kind === "threesec") threeSecByIntent.set(e.intent, (threeSecByIntent.get(e.intent) ?? 0) + 1);
   }
-  return { tos, total: toLog.length, byZone, byKindZone, byPlayer };
+  return { tos, total: toLog.length, byZone, byKindZone, byPlayer, threeSecByIntent };
 }
 
 const touches = new Map<string, number>();
