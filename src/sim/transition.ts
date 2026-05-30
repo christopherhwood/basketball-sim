@@ -1,10 +1,11 @@
 import { HOOP, DT } from "../core/constants.js";
-import { dist, lerp, clamp } from "../core/math.js";
+import { dist, lerp, clamp, chance } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { spotsFor } from "./possession.js";
 import { contestOf, makeProb } from "./shot.js";
 import { attemptShot } from "./resolution.js";
 import { effectiveTendencies } from "./tendency.js";
+import { recordFastBreak, recordTransitionStart } from "./debugTally.js";
 import type { Player, Point } from "../types.js";
 
 const STEAL_REACTION_DELAY = 0.35;
@@ -19,6 +20,39 @@ const FASTBREAK_RECOVERY_SPEED_SLOPE = 0.012;
 const FASTBREAK_RECOVERY_DEF_SLOPE = 0.06;
 const FASTBREAK_RECOVERY_MIN = -0.08;
 const FASTBREAK_RECOVERY_MAX = 0.34;
+
+// ----- Fast-break gating (floor balance) -----
+// A live recovery only becomes a numbers break when the opponent over-committed
+// (crashed the glass) or got caught moving the wrong way (a live steal). A clean
+// defensive rebound against a balanced floor is walked up, NOT run out — most of
+// the conceding team has floor balance and gets back before the ball is advanced.
+const FB_MIN_RUNWAY = 24; // ft from the rim: closer than this and there's no break to have
+const FB_DREB_BASE = 0.01; // base break chance off a defensive rebound (balanced floor, long-board leak-out)
+const FB_STEAL_BASE = 0.5; // base off a live steal (defense scrambling the wrong way)
+const FB_CRASH_PIVOT = 58; // crashGlass at/above which an opponent commits to the offensive glass
+const FB_CRASH_BONUS = 0.03; // per crashing opponent who lost floor balance and can't recover
+const FB_PUSH_SLOPE = 0.004; // per point of advancer pushTransition above 50 (willingness multiplier)
+const FB_SPEED_SLOPE = 0.004; // per point of advancer speed above 80 (a burner leaks out)
+const FB_MAX = 0.8;
+
+// ----- Outlet selection -----
+// The break is led by whoever is furthest down the floor AND can handle it — the
+// leak-out runner. Absent a leak-out, the ball goes to the primary playmaker to
+// reset and walk it up.
+const OUTLET_MIN_HANDLE = 62; // handle (stronger hand) needed to push/lead a break
+const OUTLET_LEAK_MARGIN = 8; // ft a capable handler must be ahead of the recoverer to be the outlet
+
+function handleOf(p: Player): number {
+  return Math.max(p.attr.handleLeft, p.attr.handleRight);
+}
+
+/* The primary playmaker to reset and walk it up: the designated handler if there
+   is one, else the best passer on the floor. */
+function playmaker(off: Player[]): Player {
+  const pg = off.find((p) => p.role === "handler");
+  if (pg) return pg;
+  return off.reduce((b, p) => (p.attr.pass > b.attr.pass ? p : b), off[0]);
+}
 
 function recoveryQuality(d: Player): number {
   return clamp((d.attr.iq * 0.45 + d.attr.perimD * 0.35 + d.attr.interiorD * 0.2 - 50) / 45, 0, 1);
@@ -144,20 +178,29 @@ export function updateTransition(): void {
     // FAST BREAK detection (live turnovers only): are fewer than ~2 defenders
     // back goalside, with a runway to the rim? If so, attack instead of pulling out.
     if (tr.fastbreak === undefined) {
-      const dirRim = Math.sign(atk.x - tr.pg.x) || 1;
-      let back = 0;
-      for (const d of def) {
-        if (Math.sign(atk.x - d.x) === dirRim && Math.abs(atk.x - d.x) < Math.abs(atk.x - tr.pg.x) - 3) back++;
+      // Whether a live recovery is a true numbers break depends on the opponent's
+      // floor balance, not on who happens to be goalside the instant the ball is
+      // secured (everyone is still at the other end). A steal catches the defense
+      // moving the wrong way; a defensive rebound only runs out when the opponent
+      // crashed the glass and can't recover. pushTransition / advancer speed bias
+      // how aggressively this team looks to run.
+      if (tr.kind !== "live" || dist(tr.pg, atk) <= FB_MIN_RUNWAY) {
+        tr.fastbreak = false;
+      } else {
+        let crashers = 0;
+        for (const d of def) if (effectiveTendencies(d).crashGlass >= FB_CRASH_PIVOT) crashers++;
+        const push = effectiveTendencies(tr.pg).pushTransition;
+        // base advantage: a steal scrambles the defense; a clean rebound only runs
+        // out when the opponent crashed the glass (each crasher is a man who can't
+        // get back). push/speed scale how readily this team turns it into a break.
+        const advantage = (tr.stealStart ? FB_STEAL_BASE : FB_DREB_BASE) + crashers * FB_CRASH_BONUS;
+        const willToRun = clamp(0.7 + (push - 50) * FB_PUSH_SLOPE + Math.max(0, tr.pg.attr.speed - 80) * FB_SPEED_SLOPE, 0.5, 1.4);
+        tr.fastbreak = chance(clamp(advantage * willToRun, 0, FB_MAX));
       }
-      // ball-handler's pushTransition biases how readily the team pushes:
-      // 50 is neutral (matches the current back<=1 / runway>18 threshold), high pushes
-      // more (tolerates an extra defender back and a shorter runway), low pulls it out.
-      const push = effectiveTendencies(tr.pg).pushTransition;
-      const stealBoost = tr.stealStart ? 1 : 0;
-      const backTol = (push >= 75 ? 2 : push < 25 ? 0 : 1) + stealBoost;
-      const runway = 18 - (push - 50) * 0.12 - stealBoost * 3;
-      tr.fastbreak = tr.kind === "live" && back <= backTol && dist(tr.pg, atk) > runway;
-      if (tr.fastbreak) G.banner = { text: "FAST BREAK", t: 80 };
+      if (tr.fastbreak) {
+        recordFastBreak(tr.stealStart ? "steal" : "dreb");
+        G.banner = { text: "FAST BREAK", t: 80 };
+      }
     }
     if (tr.fastbreak) {
       tr.pg.target = { x: atk.x, y: 25 }; // attack the rim
@@ -179,7 +222,7 @@ export function updateTransition(): void {
         const contest = contestOf(tr.pg, def);
         G.trans = null;
         G.driving = false;
-        attemptShot(tr.pg, "rim", contest, 2, makeProb(tr.pg, "rim", contest));
+        attemptShot(tr.pg, "rim", contest, 2, makeProb(tr.pg, "rim", contest), true);
         return;
       }
       if (tr.t > 7) {
@@ -252,12 +295,26 @@ export function beginLiveTransition(recoverer: Player, stealStart = false): void
     p.offLaneT = 0;
     p.defLaneT = 0;
   });
-  // best ball-handler by stronger hand (default until force-direction exists)
-  const handleOf = (p: Player): number => Math.max(p.attr.handleLeft, p.attr.handleRight);
-  let adv = off[0];
+  // Advance the ball with whoever is furthest down the floor AND can actually
+  // handle it — the leak-out runner ahead of the pack. If nobody has leaked out,
+  // there's no break to lead, so reset and look for the primary playmaker.
+  const atkRim = HOOP[G.attackHoop!];
+  const dirToAtk = Math.sign(atkRim.x - recoverer.x) || 1;
+  const fwd = (p: Player): number => p.x * dirToAtk; // larger = further down the floor toward the rim
+  let runner: Player | null = null;
+  let bestFwd = fwd(recoverer) + OUTLET_LEAK_MARGIN;
   for (const p of off) {
-    if (handleOf(p) > handleOf(adv)) adv = p;
+    if (p === recoverer || handleOf(p) < OUTLET_MIN_HANDLE) continue;
+    if (fwd(p) > bestFwd) {
+      bestFwd = fwd(p);
+      runner = p;
+    }
   }
+  const pg = playmaker(off);
+  // No leak-out: a guard pushes a live steal himself; otherwise (and on any
+  // walk-up rebound by a non-handler) reset and find the primary playmaker.
+  const recovererCanLead = handleOf(recoverer) >= OUTLET_MIN_HANDLE && (stealStart || recoverer === pg);
+  const adv = runner ?? (recovererCanLead ? recoverer : pg);
   if (adv === recoverer || dist(recoverer, adv) < 7) {
     recoverer.hasBall = true;
     G.ball.holder = recoverer;
@@ -282,4 +339,5 @@ export function beginLiveTransition(recoverer: Player, stealStart = false): void
   G.possClock = 0;
   G.holdT = 0;
   G.ball.state = "transition";
+  recordTransitionStart(stealStart ? "steal" : "dreb");
 }
