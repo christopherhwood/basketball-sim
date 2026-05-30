@@ -202,7 +202,17 @@ const THREE_UTILITY_MULT = 1.12; // slightly trimmed from 1.2
 // Controls how strongly the shootThree tendency swings three volume: 1 = full
 // (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
 // visible after route-risk tuning removes some easy pass-first outcomes.
-const THREE_TEND_COMPRESS = 1.1;
+// Shoot-tendency → volume coupling: steeper than the generic tendencyFactor so a
+// player's shoot tendency (and coaching that shifts it) drives his shot volume
+// with teeth. Pivot near the league-average shoot tendency (neutral there); the
+// spread widens so a reluctant shooter genuinely defers and a gunner fires more.
+const SHOOT_TEND_PIVOT = 55;
+const SHOOT_TEND_SLOPE = 0.018; // per tendency point (vs the generic ~0.0112)
+const SHOOT_TEND_LO = 0.4;
+const SHOOT_TEND_HI = 1.6;
+function shootTendMult(tend: number): number {
+  return clamp(1 + (tend - SHOOT_TEND_PIVOT) * SHOOT_TEND_SLOPE, SHOOT_TEND_LO, SHOOT_TEND_HI);
+}
 // Flat additive bump to open three-point utility. Lifts low-three teams toward
 // the 3PA floor WITHOUT scaling up high-volume teams (they are already shooting),
 // so it tightens the floor without pushing the pace-and-space ceiling over.
@@ -390,10 +400,12 @@ export function offenseDecide(): void {
       type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
     let shootU = ev * selM * (0.35 + 0.65 * open) + urg * 2.4;
     if (type === "three") {
-      // compressed tendency swing keeps the high/low ordering but narrows the
-      // absolute spread, then THREE_UTILITY_MULT sets the overall volume.
-      const tf = 1 + (tendencyFactor(shootTend) - 1) * THREE_TEND_COMPRESS;
-      shootU *= tf * THREE_UTILITY_MULT * tuning.decisions.threeUtilityScale;
+      // Shoot volume tracks the shoot tendency on a STEEPER curve than the generic
+      // tendencyFactor — so the data value and coaching (which shift the effective
+      // tendency) drive the shot mix with real teeth, rather than a good rating
+      // alone dictating volume. Pivot near the league-average shootThree so the
+      // average shooter is ~neutral while the spread (reluctant vs gunner) widens.
+      shootU *= shootTendMult(shootTend) * THREE_UTILITY_MULT * tuning.decisions.threeUtilityScale;
       // open-look floor: nudges MILDLY-reluctant but capable shooters to take the
       // open three. The reluctance weight is a band peaking around shootThree ~50
       // and fading to zero both at neutral-plus (high-volume teams already shoot
@@ -407,6 +419,8 @@ export function offenseDecide(): void {
       const capable = clamp((t3 - 42) / 16, 0, 1) * clamp((78 - t3) / 16, 0, 1);
       shootU += THREE_UTILITY_FLOOR * tuning.decisions.threeUtilityScale * open * reluctance * capable;
     } else {
+      // mid/drive volume keeps the generic (gentler) tendency scaling — steepening
+      // here would suppress 2-point looks (lower avg tendencies) and push the 3-rate up.
       shootU *= tendencyFactor(shootTend);
     }
 
