@@ -17,6 +17,10 @@ import type { HoopSide, Point, Player } from "../types.js";
    band where long caroms and kick-outs land. Defenders box out by holding
    goalside of their man — distributing rather than collapsing onto the rim. */
 
+// Settle beat after a catch: ticks a catcher waits before his first decision, so
+// the ball gets HELD/surveyed instead of instantly swung hand-to-hand. ~0.5s.
+const CATCH_SETTLE_CD = 4;
+
 // Bigs crash to the near-block area
 const CONV_BIG_DIST_FROM_HOOP = 6.5;   // ft from hoop for inside rebound position
 const CONV_BIG_Y_SPREAD = 10.0;         // half-spread in y; wider spread across carom band
@@ -209,7 +213,10 @@ export function tick(): void {
       G.ball.hy = undefined;
       G.ball.bspeed = undefined;
       G.pendingAssist = G.ball.from;
-      G.decideCD = 3;
+      // Settle beat: a catcher surveys before acting instead of instantly swinging
+      // the ball along — keeps the offense readable (the ball gets HELD) rather
+      // than pinging hand-to-hand every fraction of a second.
+      G.decideCD = CATCH_SETTLE_CD;
     }
   } else if (G.ball.state === "shot") {
     G.ball.flight++;

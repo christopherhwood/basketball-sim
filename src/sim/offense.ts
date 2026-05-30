@@ -35,11 +35,14 @@ function heightTerm(p: Player): number {
 // Skill matters — an elite finisher scores over a same-size defender, not just
 // over a smaller one.
 const POST_FINISH_W = 0.3; // weight on finishing skill in the post offense rating
+const POST_DEF_BLOCK_W = 0.12; // weight on the defender's shot-blocking — a rim protector deters backdowns
 function postOffenseRating(p: Player): number {
   return p.attr.strength + weightTerm(p) + heightTerm(p) + p.attr.finishing * POST_FINISH_W;
 }
 function postDefenseRating(d: Player): number {
-  return d.attr.strength + weightTerm(d) + d.attr.interiorD * 0.4;
+  // physicality (strength/mass) + interior defense + rim protection (block): a
+  // great shot-blocker is harder to score over in the post, not just a banger.
+  return d.attr.strength + weightTerm(d) + d.attr.interiorD * 0.4 + d.attr.block * POST_DEF_BLOCK_W;
 }
 
 function hoopDepth(pt: Point, h: Point): number {
@@ -167,6 +170,8 @@ const LAYUP_FINISH_BONUS = 0.7; // shoot-utility bump to finish at the rim with 
 const LAYUP_BEATEN_BEHIND = 0.5; // ft: on-ball defender is "beaten" if this far past the ball toward... (goal-side test)
 const LAYUP_BEATEN_GAP = 3.5; // ft: or has lost this much contact with the handler
 const LAYUP_GO_UP_DIST = 5; // ft from rim: at point-blank a beaten driver goes up with it (no "contained" reset)
+const PUTBACK_RANGE = 7; // ft from rim within which a fresh offensive rebound goes back up (matches resolution.ts)
+const PUTBACK_SHOOT_BONUS = 1.5; // shoot-utility bump for an immediate putback off an offensive board
 
 // Early-clock patience: contested shots are suppressed when the shot clock is
 // full, scaled by (1 - openness). Team pace shifts the bar up (slow) or down
@@ -634,6 +639,14 @@ export function offenseDecide(): void {
       driveU += OPEN_CATCH_DRIVE_BONUS;
       passU *= OPEN_CATCH_RESET_PENALTY;
     }
+
+    // Putback: just grabbed an offensive board at the rim — go straight back up
+    // rather than kick it out. Consumed here whether or not he ends up shooting.
+    if (G.putbackBy === bh && dh < PUTBACK_RANGE) {
+      shootU += PUTBACK_SHOOT_BONUS;
+      passU *= 0.5;
+    }
+    G.putbackBy = null;
 
     // low IQ adds noise to the choice
     const noise = ((99 - bh.attr.iq) / 99) * 0.6;
@@ -1419,9 +1432,10 @@ function startPass(from: Player, to: Player): void {
   G.ball.target = to;
   G.ball.flight = 0;
   G.ball.from = from;
-  // Ball travels at ~40 ft/s (~27 mph) — a real chest pass clearly outpaces a
-  // sprinting defender (top ~24 ft/s). 0.25 ticks/ft → dist/(0.25*0.1) = 40 ft/s.
-  G.ball.passDur = Math.max(2, Math.round(dist(from, to) * 0.25));
+  // Ball travels at ~31 ft/s (~21 mph) — a chest pass still clearly outpaces a
+  // sprinting defender (top ~24 ft/s) but reads at a watchable, announceable pace
+  // rather than a blur. 0.32 ticks/ft → dist/(0.32*0.1) ≈ 31 ft/s; min 0.3s.
+  G.ball.passDur = Math.max(3, Math.round(dist(from, to) * 0.28));
   const def = defTeam();
   const routeRisk = passRouteRisk(from, to, hoop());
 
