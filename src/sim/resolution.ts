@@ -5,6 +5,7 @@ import { G, offTeam, defTeam, hoop, logEv } from "../core/state.js";
 import { beginScoreTransition, beginLiveTransition } from "./transition.js";
 import { setupPossession } from "./possession.js";
 import { effectiveTendencies } from "./tendency.js";
+import { recordShot } from "./debugTally.js";
 import { simTunables } from "./tunables.js";
 import { tacFor } from "../tactics/tactics.js";
 import type { Player, Point, ShotType } from "../types.js";
@@ -87,7 +88,7 @@ function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   return { d: best, dd: bd };
 }
 
-export function attemptShot(sh: Player, type: ShotType, contest: number, pts: number, mp: number): void {
+export function attemptShot(sh: Player, type: ShotType, contest: number, pts: number, mp: number, transition = false): void {
   const tuning = simTunables();
   G.lastShooter = sh;
   G.lastAssist = G.pendingAssist;
@@ -110,6 +111,7 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
         sh.stats.rimFga++;
         if ((type as ShotType) === "three") sh.stats.tpa++;
         if ("stats" in prot) prot.stats.blk++;
+        recordShot(sh.name, type, false, transition);
         logEv(`${(prot as Player).name} BLOCKS ${sh.name} at the rim!`, "to");
         missAndRebound(sh);
         return;
@@ -167,7 +169,7 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
       const fp = clamp(base + disciplineAdj + iqAdj + drawAdj + mismatchAdj + pressureAdj + gambleAdj, 0, cap);
 
       if (chance(fp)) {
-        beginFouled(sh, type, pts, chance(mp));
+        beginFouled(sh, type, pts, chance(mp), transition);
         return;
       }
     }
@@ -182,7 +184,9 @@ export function attemptShot(sh: Player, type: ShotType, contest: number, pts: nu
   G.ball.from = sh;
   G.ball.flight = 0;
   G.ball.passDur = Math.max(4, Math.round(dist(sh, hoop()) * 0.5));
-  G.ball.shotMeta = { shooter: sh, made: chance(mp), pts, type, origin: { x: sh.x, y: sh.y } };
+  const made = chance(mp);
+  recordShot(sh.name, type, made, transition);
+  G.ball.shotMeta = { shooter: sh, made, pts, type, origin: { x: sh.x, y: sh.y } };
 }
 
 export function resolveShot(): void {
@@ -365,11 +369,12 @@ function setupFTLineup(sh: Player): void {
   off.forEach((o, i) => (o.target = i < 2 ? block[2 + i] : { x: h.x + dir * 18, y: 42 }));
 }
 
-export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean): void {
+export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boolean, transition = false): void {
   if (andOne) {
     // shot fell + foul: count bucket + 1 FT
     sh.stats.fga++;
     if (type === "rim" || type === "close") sh.stats.rimFga++;
+    recordShot(sh.name, type, true, transition);
     sh.stats.fgm++;
     if (type === "three") {
       sh.stats.tpa++; // a made three on an and-one must also count the attempt

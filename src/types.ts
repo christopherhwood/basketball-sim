@@ -223,6 +223,9 @@ export interface GameState {
   over: boolean;
   feed: FeedEvent[];
   pnrSwitched?: boolean;
+  // per-possession PnR roll/pop decision for the screener (undefined until the
+  // roll phase decides it): true = pick-and-pop to the arc, false = roll to the rim.
+  screenPop?: boolean;
   driving?: boolean;
   // cumulative seconds the handler has patiently held/probed this possession
   // (no good look yet) — lets off-ball motion and a ball screen develop.

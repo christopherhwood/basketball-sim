@@ -153,7 +153,7 @@ export function tick(): void {
     const phase = G.trans?.phase;
     if (phase === "inpass" || phase === "outlet" || phase === "advance") {
       G.gameClock -= DT;
-      G.shotClock -= DT;
+      G.shotClock = Math.max(0, G.shotClock - DT);
       G.possClock += DT;
       if (G.gameClock <= 0) {
         endQuarter();
@@ -162,9 +162,10 @@ export function tick(): void {
     }
     return;
   }
-  // clocks
+  // clocks. The shot clock is floored at 0 so it never reads negative while a
+  // shot/pass is in the air (the violation still fires at 0 in a held state).
   G.gameClock -= DT;
-  G.shotClock -= DT;
+  G.shotClock = Math.max(0, G.shotClock - DT);
   G.possClock += DT;
   if (G.gameClock <= 0) {
     endQuarter();

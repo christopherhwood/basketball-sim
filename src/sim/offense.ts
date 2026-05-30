@@ -10,6 +10,7 @@ import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
 import { beginFouled } from "./resolution.js";
+import { recordDecision, recordTouch, recordTO } from "./debugTally.js";
 import { simTunables } from "./tunables.js";
 import type { Player, Point, Tactics } from "../types.js";
 
@@ -27,6 +28,18 @@ function weightTerm(p: Player): number {
 }
 function heightTerm(p: Player): number {
   return clamp((p.attr.height - 6.5) * 6, -4, 6);
+}
+
+// Post matchup: the backer-down's edge weighs physical leverage (strength, mass,
+// length) AND finishing touch over a set defender's physicality + interior D.
+// Skill matters — an elite finisher scores over a same-size defender, not just
+// over a smaller one.
+const POST_FINISH_W = 0.3; // weight on finishing skill in the post offense rating
+function postOffenseRating(p: Player): number {
+  return p.attr.strength + weightTerm(p) + heightTerm(p) + p.attr.finishing * POST_FINISH_W;
+}
+function postDefenseRating(d: Player): number {
+  return d.attr.strength + weightTerm(d) + d.attr.interiorD * 0.4;
 }
 
 function hoopDepth(pt: Point, h: Point): number {
@@ -153,6 +166,7 @@ const LAYUP_DRIVE_BONUS = 0.6; // keep-attacking bonus while still outside finis
 const LAYUP_FINISH_BONUS = 0.7; // shoot-utility bump to finish at the rim with no help
 const LAYUP_BEATEN_BEHIND = 0.5; // ft: on-ball defender is "beaten" if this far past the ball toward... (goal-side test)
 const LAYUP_BEATEN_GAP = 3.5; // ft: or has lost this much contact with the handler
+const LAYUP_GO_UP_DIST = 5; // ft from rim: at point-blank a beaten driver goes up with it (no "contained" reset)
 
 // Early-clock patience: contested shots are suppressed when the shot clock is
 // full, scaled by (1 - openness). Team pace shifts the bar up (slow) or down
@@ -169,9 +183,10 @@ const OPEN_CATCH_RESET_PENALTY = 0.6; // discourage passing it back out when wid
 
 // Post-feed: when a teammate is posting with a position edge, the handler feeds him
 const POST_FEED_RANGE = 14; // ft to the hoop: a big this close can be fed
-const POST_FEED_EDGE_MIN = 4; // minimum physical edge for a feed to be attractive
-const POST_FEED_PASS_BONUS = 1.6; // pass-utility bonus when feeding a posting big
-const POST_FEED_TEND_PIVOT = 70; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
+const POST_FEED_EDGE_MIN = 1.5; // minimum physical edge for a feed to be attractive
+const POST_FEED_PASS_BONUS = 1.4; // pass-utility bonus when feeding a posting big (scaled by the mismatch size)
+const POST_FEED_SMOTHER_R = 5.5; // ft: a 2nd defender this close to the post man means a double-team — don't feed into it
+const POST_FEED_TEND_PIVOT = 45; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
 
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
 const THREE_UTILITY_MULT = 1.2; // scales three-shoot utility; raised so 3PAr stays ~30% after early-clock shot patience trims volume
@@ -187,21 +202,32 @@ const THREE_UTILITY_FLOOR = 1.65;
 // Post-up mechanic (adds close buckets + free throws for bigs). A post threat
 // near the basket with a physical edge over his on-ball defender backs him down.
 const POST_RANGE = 12; // ft to the hoop within which a post-up is available
-const POST_EDGE_UTIL_MULT = 0.07; // converts physical edge -> base post-up utility
-const POST_TEND_MULT = 1.7; // scales post-up utility by the postUp tendency factor
+const POST_BASE_UTIL = 0.55; // base attraction of a post-up for a posting big with the ball at the block
+const POST_MIN_EDGE = 0; // need at least a neutral matchup to back a defender down
+const POST_MIN_TEND = 35; // a player only backs his man down if he's enough of a post threat (reluctant guards drive instead)
+const POST_EDGE_CAP = 45; // clamp the edge bonus; high enough that a true mismatch (a guard on a big) posts hard, but bounded
+const POST_EDGE_UTIL_MULT = 0.05; // converts (capped) physical edge -> extra post-up utility
+const POST_TEND_MULT = 1.25; // scales post-up utility by the postUp tendency factor
 const POST_EDGE_MULT = 0.012; // make-prob bump per point of physical edge
 const POST_EDGE_MAKE_CAP = 0.16; // ceiling on the make-prob bump from the edge
-const POST_FOUL_BASE = 0.24; // baseline foul-draw chance on a backdown
-const POST_FOUL_EDGE_SLOPE = 0.010; // extra foul-draw chance per point of edge
-const POST_FOUL_CAP = 0.52; // ceiling on post-up foul-draw chance
-const POST_OFFBALL_PIVOT = 70; // postUp tendency at/above which a big posts on the block off-ball
+const POST_FOUL_BASE = 0.15; // baseline foul-draw chance on a backdown
+const POST_FOUL_EDGE_SLOPE = 0.006; // extra foul-draw chance per point of edge
+const POST_FOUL_CAP = 0.36; // ceiling on post-up foul-draw chance
+const POST_OFFBALL_PIVOT = 70; // postUp tendency at/above which a DEDICATED post big camps the block off-ball (kept high so stretch bigs space/pop and only post when fed or on a mismatch)
 
 /* ---------- OFF-BALL ROLE + MOTION TUNING ----------
    Role classification and ball-reactive cutting knobs. Bigs operate INSIDE
    (dunker spot / short corner / block); shooters space to the perimeter. */
 const BIG_SHOOT_THREE_MAX = 45; // shootThree below this -> treat as an inside (big) role
 const BIG_POST_PIVOT = POST_OFFBALL_PIVOT; // high postUp also marks an inside role
-const SCREENER_POP_THREE = 70; // a screening big only pops beyond the arc if shootThree above this
+// A screening big pops beyond the arc (pick-and-pop) when he can actually shoot
+// it — gated on three-point RATING, with even a modest shooting tendency. This is
+// what keeps stretch bigs (e.g. a 7-footer with range) from always rolling.
+const POP_THREE_RATING = 68; // three rating at/above which a screener can pick-and-pop
+const POP_THREE_TEND = 40; // minimum shootThree tendency to bother popping
+const POP_OUT_DEPTH = 24.5; // ft from the hoop the screener pops to (beyond the 23.75 arc → a real three)
+const POP_SHARE_BASE = 0.4; // base share of PnRs a capable shooter pops (rest he rolls)
+const POP_SHARE_SLOPE = 0.012; // per point of shootThree above 50 → more popping
 
 // Inside home spots (relative to the attacking hoop), assigned to bigs so they
 // stop drifting to the arc. Homes are lane-adjacent; block touches are temporary.
@@ -286,6 +312,7 @@ export function offenseDecide(): void {
     G.decideCD = 4; // decide ~ every 0.4s
     const bh = G.ball.holder;
     if (!bh) return;
+    recordTouch(bh.name);
 
     // ----- on-ball turnover / strip check (before any shoot/drive/pass) -----
     // The on-ball defender can force a live-ball turnover this window. Scales with
@@ -305,6 +332,7 @@ export function offenseDecide(): void {
         tovP = clamp(tovP, 0, ON_BALL_TOV_CAP);
         if (chance(tovP)) {
           bh.stats.tov++;
+          recordTO("strip");
           if (chance(STRIP_CLEAN_SHARE)) {
             // clean steal: the on-ball defender takes it and pushes the other way
             onBallDef.stats.stl++;
@@ -448,10 +476,21 @@ export function offenseDecide(): void {
     // ramp (kicks in under 10s). Only when a real drive lane exists (dh check).
     if (dh > DRIVE_BASE_DIST_MIN) driveU += urg * DRIVE_URGENCY;
 
+    // Has the handler beaten his on-ball defender (no longer goal-side, or lost
+    // contact)? A beaten driver attacks the rim to finish or draw a foul.
+    const onBallBeaten = onBall
+      ? dist(onBall, h) > dh - LAYUP_BEATEN_BEHIND || dist(onBall, bh) > LAYUP_BEATEN_GAP
+      : true;
+    // A beaten driver with no two-man wall ahead keeps attacking the rim instead
+    // of kicking — that's how a slasher finishes and gets to the line. Only kick
+    // when he's genuinely walled off (a real help commitment).
+    const cleanToRim = G.driving && onBallBeaten && laneWallCount(bh, def, h) < 2;
+
     // pass utility: find best teammate (more open / better look)
     // Also checks for drive-and-kick targets (open man after help commits)
     // and post-feed targets (posting big with a position edge).
     const driveKickActive = G.driving && dh < DRIVE_KICK_MIN_HANDLER_DIST
+      && !cleanToRim
       && helpCommittedToDriver(bh, def, h);
     const kickPassBonus = driveKickActive
       ? DRIVE_KICK_OPEN_BONUS * clamp((bh.attr.pass - 50) * DRIVE_KICK_PASS_SLOPE + 1, 0.7, 1.5)
@@ -498,28 +537,27 @@ export function offenseDecide(): void {
     const postDef = onBall;
     let postEdge = 0;
     let postU = -1;
-    if (postDef && dh <= POST_RANGE) {
-      postEdge =
-        bh.attr.strength + weightTerm(bh) + heightTerm(bh) -
-        (postDef.attr.strength + weightTerm(postDef) + postDef.attr.interiorD * 0.4);
-      postU =
-        Math.max(0, postEdge) * POST_EDGE_UTIL_MULT * tendencyFactor(tendencies.postUp) * POST_TEND_MULT;
+    if (postDef && dh <= POST_RANGE && tendencies.postUp >= POST_MIN_TEND) {
+      postEdge = postOffenseRating(bh) - postDefenseRating(postDef);
+      if (postEdge > POST_MIN_EDGE) {
+        postU =
+          (POST_BASE_UTIL + clamp(postEdge, 0, POST_EDGE_CAP) * POST_EDGE_UTIL_MULT) *
+          tendencyFactor(tendencies.postUp) *
+          POST_TEND_MULT;
+      }
     }
 
-    // Beaten-to-the-rim finish: if the on-ball defender has been beaten (no longer
-    // goal-side, or lost contact) and the lane is clear of help, the handler
-    // attacks the basket — keep driving until in finishing range, then go up with
-    // the layup rather than pulling up or kicking it back out. The payoff for
-    // beating your man when nobody rotates over.
-    const onBallBeaten = onBall
-      ? dist(onBall, h) > dh - LAYUP_BEATEN_BEHIND || dist(onBall, bh) > LAYUP_BEATEN_GAP
-      : true;
-    if (onBallBeaten && dh < LAYUP_ATTACK_DIST && isLaneClear(bh, def, h) && rimHelp(bh, def, h) < 0.12) {
+    // Beaten-to-the-rim finish: a beaten driver (computed above) attacks the
+    // basket — keep driving until in finishing range, then go up with the layup
+    // rather than pulling up or kicking it back out. The payoff for beating your
+    // man when nobody walls the lane.
+    if (onBallBeaten && dh < LAYUP_ATTACK_DIST && laneWallCount(bh, def, h) < 2) {
+      const help = rimHelp(bh, def, h);
       if (dh > DRIVE_BASE_DIST_MIN) {
-        driveU += LAYUP_DRIVE_BONUS;
+        driveU += LAYUP_DRIVE_BONUS * clamp(1 - help * 0.5, 0.4, 1);
       } else {
-        shootU += LAYUP_FINISH_BONUS;
-        passU *= 0.4; // don't kick a wide-open layup
+        shootU += LAYUP_FINISH_BONUS * clamp(1 - help * 0.6, 0.3, 1);
+        passU *= clamp(0.4 + help * 0.5, 0.4, 0.85); // heavy help → more willing to kick; light → finish
       }
     }
 
@@ -532,7 +570,7 @@ export function offenseDecide(): void {
     // When cut off, the handler picks up to kick/pull up/reset; charging into a
     // set defender turns it over some of the time (mostly a live strip; charges
     // and travels are rare dead balls).
-    if (G.driving && dh < LAYUP_ATTACK_DIST) {
+    if (G.driving && dh < LAYUP_ATTACK_DIST && dh > LAYUP_GO_UP_DIST) {
       const cutoffDef = driveCutOff(bh, def, h);
       let contained = false;
       if (cutoffDef) {
@@ -547,10 +585,17 @@ export function offenseDecide(): void {
             G.driveBeaten = !chance(clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX));
           }
           contained = !G.driveBeaten;
+          if (!contained) recordDecision("driveBeat");
         } else {
-          contained = true; // help defender walling the lane is a genuine second wall
+          // A help defender stepped up. If the handler has already beaten his man,
+          // a single rotation doesn't wall him off — he attacks the rim and the
+          // help CONTESTS the finish (lower make %, more fouls). Only a genuine
+          // two-man collapse, or help arriving before he's beaten his man, stops
+          // the drive.
+          contained = !onBallBeaten || laneWallCount(bh, def, h) >= 2;
         }
       }
+      if (cutoffDef && contained) recordDecision("contained");
       if (cutoffDef && contained) {
         G.driving = false;
         const driveSpeed = Math.hypot(bh.vx, bh.vy);
@@ -561,6 +606,7 @@ export function offenseDecide(): void {
         );
         if (chance(toP)) {
           bh.stats.tov++;
+          recordTO("cutoff");
           const r = rng();
           if (r < CUTOFF_CHARGE_SHARE) {
             // charge — rare, dead ball
@@ -613,26 +659,32 @@ export function offenseDecide(): void {
     if (wantHold) {
       G.holdT = (G.holdT ?? 0) + 0.4;
       G.driving = false;
+      recordDecision("hold");
       holdAndProbe(bh, off, def, h);
       return;
     }
 
     if (best === postU && postU > 0) {
       G.driving = false;
+      recordDecision("post");
       postUp(bh, postDef!, contest, postEdge);
     } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6 || bh.catchShoot)) {
       G.driving = false;
       bh.catchShoot = false;
+      recordDecision("shoot");
       attemptShot(bh, type, contest, pts, mp);
     } else if (best === driveU) {
       if (!G.driving) G.driveBeaten = undefined; // fresh drive → re-roll the matchup next tick
       G.driving = true;
+      recordDecision("drive");
       bh.target = { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.60) };
     } else if (bestPass) {
       G.driving = false;
+      recordDecision("pass");
       startPass(bh, bestPass);
     } else {
       G.driving = false;
+      recordDecision("shoot");
       attemptShot(bh, type, contest, pts, mp);
     } // nothing better, just shoot
   }
@@ -663,6 +715,26 @@ function driveCutOff(bh: Player, def: Player[], h: Point): Player | null {
     }
   }
   return nearest;
+}
+
+/* Counts defenders walling the driving lane ahead (a wider corridor than the
+   cutoff test, including the on-ball man). Two or more is a genuine collapse the
+   driver can't split; one is a single rotation he attacks and finishes over. */
+function laneWallCount(bh: Player, def: Player[], h: Point): number {
+  const dx = h.x - bh.x,
+    dy = h.y - bh.y,
+    len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len,
+    uy = dy / len;
+  let n = 0;
+  for (const d of def) {
+    const tx = d.x - bh.x,
+      ty = d.y - bh.y;
+    const along = tx * ux + ty * uy;
+    if (along < 0.5 || along > CUTOFF_AHEAD + 1.5) continue;
+    if (Math.abs(tx * uy - ty * ux) < CUTOFF_WIDTH + 0.5) n++;
+  }
+  return n;
 }
 
 /* Dribble out / around the perimeter toward whichever perimeter spot is most
@@ -817,11 +889,16 @@ function postFeedValue(t: Player, def: Player[], h: Point): number {
   if (tend.postUp < POST_FEED_TEND_PIVOT) return 0;
   const tDef = def.find((d) => d.assign === t);
   if (!tDef) return 0;
-  const edge =
-    t.attr.strength + weightTerm(t) + heightTerm(t) -
-    (tDef.attr.strength + weightTerm(tDef) + tDef.attr.interiorD * 0.4);
+  const edge = postOffenseRating(t) - postDefenseRating(tDef);
   if (edge < POST_FEED_EDGE_MIN) return 0;
-  return POST_FEED_PASS_BONUS * tendencyFactor(tend.postUp);
+  // Don't feed into a collapsed paint / double-team: if a second defender (beyond
+  // his own man) is sitting on the post, the entry pass is a turnover waiting to
+  // happen. This is what keeps clustered bigs from forcing feeds into traffic.
+  let near = 0;
+  for (const d of def) if (dist(d, t) < POST_FEED_SMOTHER_R) near++;
+  if (near >= 2) return 0;
+  // a bigger mismatch is a more attractive feed; a routine matchup is a modest nudge
+  return POST_FEED_PASS_BONUS * tendencyFactor(tend.postUp) * clamp(edge / 10, 0.3, 1.5);
 }
 
 function rimHelp(bh: Player, def: Player[], h: Point): number {
@@ -862,6 +939,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
       // come UP to the level of the screen from the interior, not from the arc
       screener.target = { x: h.x + dir * 13, y: 30 };
       G.screen = { ball: bh, screener };
+      G.screenPop = undefined; // fresh roll/pop decision each possession
       if (G.possClock > 1.6) {
         G.actionPhase = "screen";
       }
@@ -872,15 +950,19 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
         G.actionPhase = "roll";
       }
     } else if (G.actionPhase === "roll") {
-      // a genuine shooting big pops to the arc; everyone else rolls hard to the rim
-      const pops = screener.attr.three > SCREENER_POP_THREE && effectiveTendencies(screener).shootThree > SCREENER_POP_THREE;
-      const rolled = dist(screener, h) < 8;
-      if (pops) {
-        screener.target = { x: h.x + dir * 22, y: 30 };
-      } else if (rolled) {
-        // reset to an inside spot once the roll arrives — do NOT jog back out to the arc
-        screener.target = legalInsideHome(screener, h, dir);
+      // Decide once per possession whether this is a pick-and-POP or a roll. A big
+      // who can shoot pops a share of the time (scaled by his shootThree tendency)
+      // and dives the rest — so a stretch big keeps both dimensions.
+      if (G.screenPop === undefined) {
+        const tend = effectiveTendencies(screener);
+        const canPop = screener.attr.three >= POP_THREE_RATING && tend.shootThree >= POP_THREE_TEND;
+        G.screenPop = canPop && chance(clamp(POP_SHARE_BASE + (tend.shootThree - 50) * POP_SHARE_SLOPE, 0.15, 0.8));
+      }
+      if (G.screenPop) {
+        // pop BEYOND the arc for a genuine three (not a long two)
+        screener.target = { x: h.x + dir * POP_OUT_DEPTH, y: 30 };
       } else {
+        // roll/short: reset to an inside spot — do NOT jog back out to the arc
         screener.target = legalInsideHome(screener, h, dir);
       }
       G.screen = { ball: bh, screener };
@@ -1363,6 +1445,7 @@ function startPass(from: Player, to: Player): void {
     );
     if (chance(badP)) {
       from.stats.tov++;
+      recordTO("badpass");
       // nearest defender to the intended target recovers the loose ball
       let recover: Player | null = null,
         rd = 1e9,
@@ -1414,6 +1497,7 @@ function startPass(from: Player, to: Player): void {
       if (chance(sp)) {
         d.stats.stl++;
         from.stats.tov++;
+        recordTO("lane");
         logEv(`${d.name} jumps the passing lane — steal!`, "to");
         beginLiveTransition(d, true);
         return;
