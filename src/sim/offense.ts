@@ -180,7 +180,7 @@ const HANDOFF_PASS_BONUS = 1.6; // pass-utility bump for a give-up big handing i
 // Early-clock patience: contested shots are suppressed when the shot clock is
 // full, scaled by (1 - openness). Team pace shifts the bar up (slow) or down
 // (fast). Tuned so league pace lands near ~100-105 possessions/game.
-const BASE_PATIENCE = 1.0; // balanced-pace suppression at a full shot clock (tuned with the bring-up gate for ~105 poss/game)
+const BASE_PATIENCE = 0.78; // balanced-pace suppression at a full shot clock (tuned with the bring-up gate for ~105 poss/game)
 const PACE_PATIENCE = 0.25; // fast lowers / slow raises the patience bar
 const PATIENCE_OPEN_FLOOR = 0.75; // share of the patience bar that still applies to OPEN looks (lower = open shots fire freely)
 const DRIVE_URGENCY = 1.0; // late-clock (urg) additive drive-aggression boost
