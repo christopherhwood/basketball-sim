@@ -142,6 +142,29 @@ const DRIVE_KICK_HELP_DIST = 12; // a help defender must be within this of the d
 const DRIVE_KICK_OPEN_BONUS = 2.4; // pass-utility bonus for the kick-out target
 const DRIVE_KICK_MIN_HANDLER_DIST = 14; // handler must be this far in to trigger kick consideration
 const DRIVE_KICK_PASS_SLOPE = 1 / 30; // per point of passer pass attribute (above 50) boosts kick
+const CATCH_SHOOT_PASS_BONUS = 2.6; // pass-utility bonus for a man left open by a committed helper
+const CATCH_SHOOT_SHOOT_BONUS = 2.2; // shoot-utility bump when catching wide-open off a kick-out
+
+// Beaten-to-the-rim finish: once the handler has beaten his man and the lane is
+// clear of help, he attacks the basket for a layup instead of settling.
+const LAYUP_ATTACK_DIST = 16; // ft from rim within which a beaten/clear-lane drive presses on
+const LAYUP_DRIVE_BONUS = 0.6; // keep-attacking bonus while still outside finishing range
+const LAYUP_FINISH_BONUS = 0.7; // shoot-utility bump to finish at the rim with no help
+const LAYUP_BEATEN_BEHIND = 0.5; // ft: on-ball defender is "beaten" if this far past the ball toward... (goal-side test)
+const LAYUP_BEATEN_GAP = 3.5; // ft: or has lost this much contact with the handler
+
+// Early-clock patience: contested shots are suppressed when the shot clock is
+// full, scaled by (1 - openness). Team pace shifts the bar up (slow) or down
+// (fast). Tuned so league pace lands near ~100-105 possessions/game.
+const BASE_PATIENCE = 1.0; // balanced-pace suppression at a full shot clock (tuned with the bring-up gate for ~105 poss/game)
+const PACE_PATIENCE = 0.25; // fast lowers / slow raises the patience bar
+const PATIENCE_OPEN_FLOOR = 0.75; // share of the patience bar that still applies to OPEN looks (lower = open shots fire freely)
+const DRIVE_URGENCY = 1.0; // late-clock (urg) additive drive-aggression boost
+
+// Wide-open with the ball: shoot in range, otherwise attack the closeout.
+const OPEN_CATCH_CONTEST = 0.12; // nearest defender essentially absent below this contest
+const OPEN_CATCH_DRIVE_BONUS = 0.7; // attack a developing closeout rather than reset
+const OPEN_CATCH_RESET_PENALTY = 0.6; // discourage passing it back out when wide open
 
 // Post-feed: when a teammate is posting with a position edge, the handler feeds him
 const POST_FEED_RANGE = 14; // ft to the hoop: a big this close can be fed
@@ -150,7 +173,7 @@ const POST_FEED_PASS_BONUS = 1.6; // pass-utility bonus when feeding a posting b
 const POST_FEED_TEND_PIVOT = 70; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
 
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
-const THREE_UTILITY_MULT = 0.78; // scales three-shoot utility; high-shootThree still out-shoots low
+const THREE_UTILITY_MULT = 1.2; // scales three-shoot utility; raised so 3PAr stays ~30% after early-clock shot patience trims volume
 // Controls how strongly the shootThree tendency swings three volume: 1 = full
 // (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
 // visible after route-risk tuning removes some easy pass-first outcomes.
@@ -314,6 +337,27 @@ export function offenseDecide(): void {
       shootU *= tendencyFactor(shootTend);
     }
 
+    // Early-clock patience: with the shot clock full, contested looks get passed
+    // up; the bar drops smoothly as the clock winds down (and `urg` above adds
+    // late-clock urgency). Team PACE sets how patient to be — a fast team fires
+    // earlier, a slow team works for a better shot. Per-player shot freedom is
+    // NOT re-applied here: it already flows through the shoot tendency above.
+    // The suppression scales with (1 - open), so wide-open looks are taken in
+    // rhythm regardless of clock; only contested early jacks are deferred.
+    const clockFrac = clamp(G.shotClock / 24, 0, 1);
+    const paceAdj = tac.pace === "fast" ? -PACE_PATIENCE : tac.pace === "slow" ? PACE_PATIENCE : 0;
+    const patience = clamp(BASE_PATIENCE + paceAdj, 0, 1) * clockFrac;
+    shootU *= 1 - patience * (PATIENCE_OPEN_FLOOR + (1 - PATIENCE_OPEN_FLOOR) * (1 - open));
+
+    // Wide-open with the ball: a man with no defender near him should look to
+    // shoot (if in range) or attack the closeout — never just reset the offense.
+    // Covers kick-outs to a helped-off man (catchShoot) and any other time the
+    // handler catches/finds himself uncontested.
+    const wideOpen = bh.catchShoot || contest < OPEN_CATCH_CONTEST;
+    if (wideOpen && open > 0.45) {
+      shootU += CATCH_SHOOT_SHOOT_BONUS * open;
+    }
+
     // drive utility: open lane + handle/speed edge vs man, defender lag, low-iq defender
     const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
     const laneBlock = rimHelp(bh, def, h);
@@ -366,6 +410,12 @@ export function offenseDecide(): void {
     if (tac.shotSel === "three") driveU -= 0.2;
     driveU *= tendencyFactor(tendencies.driveRim) * tuning.decisions.driveUtilityScale;
 
+    // Late-clock drive aggression: unlike shooting (pickier EARLY), driving gets
+    // BOLDER as the clock winds down — with time running out a handler attacks
+    // the rim to force a shot or a foul rather than settle. Shares the `urg`
+    // ramp (kicks in under 10s). Only when a real drive lane exists (dh check).
+    if (dh > DRIVE_BASE_DIST_MIN) driveU += urg * DRIVE_URGENCY;
+
     // pass utility: find best teammate (more open / better look)
     // Also checks for drive-and-kick targets (open man after help commits)
     // and post-feed targets (posting big with a position edge).
@@ -392,6 +442,8 @@ export function offenseDecide(): void {
         const tDef = def.find((d) => d.assign === t);
         if (tDef && isHelping(tDef, bh, h)) kickBonus = kickPassBonus;
       }
+      // explicit catch-and-shoot target: helper left this man to wall up the drive
+      if (t.catchShoot) kickBonus = Math.max(kickBonus, CATCH_SHOOT_PASS_BONUS);
 
       // post-feed: a teammate posting near the basket with a physical edge earns a bonus
       const postFeedBonus = postFeedValue(t, def, h);
@@ -422,6 +474,30 @@ export function offenseDecide(): void {
         Math.max(0, postEdge) * POST_EDGE_UTIL_MULT * tendencyFactor(tendencies.postUp) * POST_TEND_MULT;
     }
 
+    // Beaten-to-the-rim finish: if the on-ball defender has been beaten (no longer
+    // goal-side, or lost contact) and the lane is clear of help, the handler
+    // attacks the basket — keep driving until in finishing range, then go up with
+    // the layup rather than pulling up or kicking it back out. The payoff for
+    // beating your man when nobody rotates over.
+    const onBallBeaten = onBall
+      ? dist(onBall, h) > dh - LAYUP_BEATEN_BEHIND || dist(onBall, bh) > LAYUP_BEATEN_GAP
+      : true;
+    if (onBallBeaten && dh < LAYUP_ATTACK_DIST && isLaneClear(bh, def, h) && rimHelp(bh, def, h) < 0.12) {
+      if (dh > DRIVE_BASE_DIST_MIN) {
+        driveU += LAYUP_DRIVE_BONUS;
+      } else {
+        shootU += LAYUP_FINISH_BONUS;
+        passU *= 0.4; // don't kick a wide-open layup
+      }
+    }
+
+    // Wide open but not in clean rhythm to shoot (or out past the line): attack
+    // the developing closeout instead of resetting the ball back out.
+    if (wideOpen) {
+      driveU += OPEN_CATCH_DRIVE_BONUS;
+      passU *= OPEN_CATCH_RESET_PENALTY;
+    }
+
     // low IQ adds noise to the choice
     const noise = ((99 - bh.attr.iq) / 99) * 0.6;
     shootU += randn() * noise;
@@ -433,8 +509,9 @@ export function offenseDecide(): void {
     if (best === postU && postU > 0) {
       G.driving = false;
       postUp(bh, postDef!, contest, postEdge);
-    } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6)) {
+    } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6 || bh.catchShoot)) {
       G.driving = false;
+      bh.catchShoot = false;
       attemptShot(bh, type, contest, pts, mp);
     } else if (best === driveU) {
       G.driving = true;
@@ -1034,7 +1111,9 @@ function startPass(from: Player, to: Player): void {
   G.ball.target = to;
   G.ball.flight = 0;
   G.ball.from = from;
-  G.ball.passDur = Math.max(2, (dist(from, to) * 0.6) | 0);
+  // Ball travels at ~40 ft/s (~27 mph) — a real chest pass clearly outpaces a
+  // sprinting defender (top ~24 ft/s). 0.25 ticks/ft → dist/(0.25*0.1) = 40 ft/s.
+  G.ball.passDur = Math.max(2, Math.round(dist(from, to) * 0.25));
   const def = defTeam();
   const routeRisk = passRouteRisk(from, to, hoop());
 

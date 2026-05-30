@@ -6,8 +6,12 @@ import type { Player } from "../types.js";
 /* ---------- 3) MOVEMENT ----------
    steer each player toward p.target up to a max speed from Speed attr,
    with light acceleration so motion looks natural, not teleporting. */
+// Top speed in ft/s. Calibrated toward NBA tracking: an average athlete (speed
+// 50) sustains ~13 ft/s (~9 mph) in a possession, an elite one (speed 100) tops
+// out ~24 ft/s (~16 mph sprint). Previously 10–18 ft/s, which left defenders
+// nearly as fast as a thrown pass (~17 ft/s) and made the floor play sluggishly.
 export function maxSpeed(p: Player): number {
-  return (10 + ((p.attr.speed - 50) / 50) * 8) * (1 - p.fatigue * 0.18);
+  return (13 + ((p.attr.speed - 50) / 50) * 11) * (1 - p.fatigue * 0.18);
 }
 
 // Arrive tuning: within ARRIVE_SLOW_R the desired speed ramps linearly to zero;

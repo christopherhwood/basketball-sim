@@ -1,8 +1,9 @@
 import { G, offTeam, defTeam, hoop } from "../core/state.js";
-import { dist, clamp, lerp } from "../core/math.js";
+import { dist, clamp, lerp, chance } from "../core/math.js";
 import { rules } from "../core/rules.js";
 import { tacFor } from "../tactics/tactics.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
+import { maxSpeed } from "./movement.js";
 import type { Player, Point, Tactics } from "../types.js";
 
 const LANE_MIN_Y = 17;
@@ -13,6 +14,14 @@ const DEF_LANE_LOW_IQ_EXTRA_T = 1.0;
 const OFFBALL_TRACK_LAG_MAX = 4.8;
 const OFFBALL_TRACK_SPEED_START = 2.5;
 const OFFBALL_TRACK_SPEED_RANGE = 11;
+// Base chance an off-ball defender recognizes a beaten drive and rotates to help.
+// IQ, interior defense, and help-defense instinct add to it; poor defenders miss
+// the rotation more often. Calibrated so team PPP stays realistic (~1.21).
+const HELP_RECOGNITION_BASE = 0.4;
+// Closeout rotation: when the ball-handler has no defender within this distance,
+// the nearest defender sprints to close out, stopping CLOSEOUT_GAP ft ball-side.
+const CLOSEOUT_OPEN_DIST = 7;
+const CLOSEOUT_GAP = 3;
 
 function paintBand(pt: Point, h: Point): boolean {
   return Math.abs(pt.x - h.x) <= LANE_DEPTH_FROM_HOOP && pt.y >= LANE_MIN_Y && pt.y <= LANE_MAX_Y;
@@ -135,26 +144,81 @@ export function defenseMove(): void {
     }
   }
 
+  // CLOSEOUT ROTATION: if the man with the ball is wide open — his own defender
+  // got caught helping/beaten and nobody is near — the closest defender rotates
+  // hard to close out. If he arrives in time he contests; if not, the offense
+  // gets the open look it earned. Whoever rotates leaves his own man, which is
+  // how kick-out chains keep finding the next open shooter.
+  if ((tac.defScheme as Tactics["defScheme"]) !== "zone23" && G.ball.holder) {
+    const ball = G.ball.holder;
+    let nearest: Player | null = null,
+      nd = 1e9;
+    for (const d of def) {
+      const dd = dist(d, ball);
+      if (dd < nd) {
+        nd = dd;
+        nearest = d;
+      }
+    }
+    if (nearest && nd > CLOSEOUT_OPEN_DIST) {
+      // close out ball-side: a step off the ball toward the hoop, not all the way
+      const dToHoop = dist(ball, h) || 1;
+      const ux = (h.x - ball.x) / dToHoop;
+      const uy = (h.y - ball.y) / dToHoop;
+      nearest.target = { x: ball.x + ux * CLOSEOUT_GAP, y: clamp(ball.y + uy * CLOSEOUT_GAP, 2, 48) };
+    }
+  }
+
   // HELP on dribble penetration: the nearest off-ball defender steps in to wall
   // up the driver, leaving his man. When the drive ends, G.driving goes false and
   // he recovers (a closeout that takes time), briefly opening the kick-out target.
-  if ((tac.defScheme as Tactics["defScheme"]) !== "zone23" && G.driving && G.ball.holder && dist(G.ball.holder, h) < 16) {
+  // Help is NOT automatic — see the four gates below.
+  if (!G.driving) {
+    // drive over: clear per-drive recognition + catch-and-shoot priming
+    for (const d of def) d.helpCommit = null;
+    for (const o of off) o.catchShoot = false;
+  } else if ((tac.defScheme as Tactics["defScheme"]) !== "zone23" && G.ball.holder && dist(G.ball.holder, h) < 16) {
     const ball = G.ball.holder;
     const onBallD = def.find((d) => d.assign === ball);
+
+    // GATE 1 (beaten): only help once the driver has actually beaten his man —
+    // the on-ball defender has lost goal-side position or lost contact. A
+    // contained dribble (defender still in front and attached) draws no help.
+    const ballToHoop = dist(ball, h);
+    const beaten =
+      !onBallD || dist(onBallD, h) > ballToHoop - 0.5 || dist(onBallD, ball) > 3.8;
+
     let helper: Player | null = null,
       hd = 1e9;
-    for (const d of def) {
-      if (d === onBallD) continue;
-      const dd = dist(d, ball);
-      if (dd < hd) {
-        hd = dd;
-        helper = d;
+    if (beaten) {
+      for (const d of def) {
+        if (d === onBallD) continue;
+        const dd = dist(d, ball);
+        if (dd < hd) {
+          hd = dd;
+          helper = d;
+        }
       }
     }
     if (helper) {
+      // GATE 2 (recognition): decide ONCE per drive whether this helper rotates.
+      // Reading the drive and leaving your man is an IQ/instinct play — low-IQ,
+      // poor interior defenders with little help instinct often just don't go.
+      if (helper.helpCommit == null) {
+        const eff = effectiveTendencies(helper);
+        const rec = clamp(
+          HELP_RECOGNITION_BASE +
+            (helper.attr.iq - 60) / 110 +
+            (helper.attr.interiorD - 60) / 170 +
+            (eff.helpDefense - 50) / 130,
+          0.04,
+          0.95,
+        );
+        helper.helpCommit = chance(rec) ? "in" : "out";
+      }
       const hf = tendencyFactor(effectiveTendencies(helper).helpDefense);
       const helpRadius = 14 * hf;
-      if (hd < helpRadius) {
+      if (helper.helpCommit === "in" && hd < helpRadius) {
         const bspeed = Math.hypot(ball.vx, ball.vy);
         const distToHoop = dist(ball, h) || 1;
         const hvx = (h.x - ball.x) / distToHoop;
@@ -165,11 +229,22 @@ export function defenseMove(): void {
         const dot = rawUx * hvx + rawUy * hvy;
         const ux = dot >= 0 ? rawUx : hvx;
         const uy = dot >= 0 ? rawUy : hvy;
-        const commitFrac = clamp(0.28 + hf * 0.22, 0.28, 0.50);
+        const commitFrac = clamp(0.28 + hf * 0.22, 0.28, 0.5);
         const stepDist = Math.max(0, distToHoop - 4) * commitFrac;
         const wallX = ball.x + ux * stepDist;
         const wallY = ball.y + uy * stepDist;
         helper.target = { x: wallX, y: clamp(wallY, 4, 46) };
+
+        // GATE 3 (latency): can the helper actually wall up before the driver
+        // reaches the rim? time-to-wall vs the driver's time-to-rim. If he can't,
+        // he's rotating late — flag his man as a catch-and-shoot kick-out target.
+        const tHelp = dist(helper, { x: wallX, y: wallY }) / (maxSpeed(helper) || 1);
+        const driveSpeed = Math.max(bspeed, maxSpeed(ball) * 0.6);
+        const tRim = Math.max(0, distToHoop - 4) / (driveSpeed || 1);
+        const late = tHelp > tRim + 0.15;
+        if (helper.assign && (late || dist(helper, helper.assign) > 4)) {
+          helper.assign.catchShoot = true;
+        }
       }
     }
   }

@@ -133,6 +133,11 @@ export type Player = {
   tendencies?: Tendencies;
   offLaneT?: number;
   defLaneT?: number;
+  // help-defense recognition for the current drive: decided once, reset when the
+  // drive ends. "in" = rotated to help, "out" = missed/declined the rotation.
+  helpCommit?: "in" | "out" | null;
+  // set on a teammate left open by a committed helper — primes a catch-and-shoot.
+  catchShoot?: boolean;
 };
 
 export type ShotMeta = {

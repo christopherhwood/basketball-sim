@@ -304,7 +304,7 @@ function missAndRebound(sh: Player): void {
         : 0;
 
     // weight term for body mass (position-holding)
-    const weightBonus = clamp(((p.attr.weight - 220) / REBOUND_WEIGHT_NORM) * REBOUND_WEIGHT_MULT, -0.05, 0.12);
+    const weightBonus = clamp(((p.attr.weight - 220) / REBOUND_WEIGHT_NORM) * REBOUND_WEIGHT_MULT, -0.08, 0.1);
 
     const w = Math.max(0.001, proxWeight * ratingMult * physMult * boxoutMult * (1 + crashBonus + weightBonus));
     weights.push(w);

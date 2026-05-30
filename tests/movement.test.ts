@@ -50,52 +50,52 @@ function soloPlayer(opts: {
   return p;
 }
 
-describe("maxSpeed: (10 + (speed-50)/50*8) * (1 - fatigue*0.18)", () => {
-  // The base term is 10 ft/s at speed=50, scaling +/-8 ft/s per 50 speed points
+describe("maxSpeed: (13 + (speed-50)/50*11) * (1 - fatigue*0.18)", () => {
+  // The base term is 13 ft/s at speed=50, scaling +/-11 ft/s per 50 speed points
   // away from 50. Fatigue linearly scales the whole thing down by 18% at full.
   function expected(speed: number, fatigue: number): number {
-    return (10 + ((speed - 50) / 50) * 8) * (1 - fatigue * 0.18);
+    return (13 + ((speed - 50) / 50) * 11) * (1 - fatigue * 0.18);
   }
 
-  it("speed=50, fatigue=0 -> exactly 10", () => {
+  it("speed=50, fatigue=0 -> exactly 13", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 50, fatigue: 0 });
-    expect(maxSpeed(p)).toBe(10);
+    expect(maxSpeed(p)).toBe(13);
     expect(maxSpeed(p)).toBe(expected(50, 0));
   });
 
-  it("speed=100, fatigue=0 -> 18 (max attribute adds 8)", () => {
+  it("speed=100, fatigue=0 -> 24 (max attribute adds 11)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 100, fatigue: 0 });
-    expect(maxSpeed(p)).toBe(18);
+    expect(maxSpeed(p)).toBe(24);
     expect(maxSpeed(p)).toBe(expected(100, 0));
   });
 
-  it("speed=0, fatigue=0 -> 2 (min attribute subtracts 8)", () => {
+  it("speed=0, fatigue=0 -> 2 (min attribute subtracts 11)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 0, fatigue: 0 });
     expect(maxSpeed(p)).toBe(2);
     expect(maxSpeed(p)).toBe(expected(0, 0));
   });
 
-  it("speed=75, fatigue=0 -> 14 (linear in speed)", () => {
+  it("speed=75, fatigue=0 -> 18.5 (linear in speed)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 75, fatigue: 0 });
-    expect(maxSpeed(p)).toBe(14);
+    expect(maxSpeed(p)).toBe(18.5);
     expect(maxSpeed(p)).toBe(expected(75, 0));
   });
 
-  it("speed=50, fatigue=1 -> 8.2 (full fatigue cuts 18%)", () => {
+  it("speed=50, fatigue=1 -> 10.66 (full fatigue cuts 18%)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 50, fatigue: 1 });
-    expect(maxSpeed(p)).toBeCloseTo(8.2, 10);
+    expect(maxSpeed(p)).toBeCloseTo(10.66, 10);
     expect(maxSpeed(p)).toBeCloseTo(expected(50, 1), 10);
   });
 
-  it("speed=50, fatigue=0.5 -> 9.1 (half fatigue cuts 9%)", () => {
+  it("speed=50, fatigue=0.5 -> 11.83 (half fatigue cuts 9%)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 50, fatigue: 0.5 });
-    expect(maxSpeed(p)).toBeCloseTo(9.1, 10);
+    expect(maxSpeed(p)).toBeCloseTo(11.83, 10);
     expect(maxSpeed(p)).toBeCloseTo(expected(50, 0.5), 10);
   });
 
-  it("speed=100, fatigue=1 -> 14.76 (both factors compose multiplicatively)", () => {
+  it("speed=100, fatigue=1 -> 19.68 (both factors compose multiplicatively)", () => {
     const p = soloPlayer({ x: 10, y: 10, speed: 100, fatigue: 1 });
-    expect(maxSpeed(p)).toBeCloseTo(14.76, 10);
+    expect(maxSpeed(p)).toBeCloseTo(19.68, 10);
     expect(maxSpeed(p)).toBeCloseTo(expected(100, 1), 10);
   });
 });
@@ -131,34 +131,34 @@ describe("moveAll: steering toward target (arrive behavior)", () => {
   // rate-limited to acc*DT per tick where acc = maxSpeed*4.
 
   it("accelerates toward target, capped at maxSpeed*4*DT per tick", () => {
-    // speed=50 -> ms=10, acc=40, acc*DT=4 ft/s max delta per tick.
-    // Starting at rest, first tick along +x: dvx = ms = 10, but clamped to 4.
+    // speed=50 -> ms=13, acc=52, acc*DT=5.2 ft/s max delta per tick.
+    // Starting at rest, first tick along +x: dvx = ms = 13, but clamped to 5.2.
     seedRng(1);
     const p = soloPlayer({ x: 10, y: 25, vx: 0, vy: 0, speed: 50, fatigue: 0, target: { x: 90, y: 25 } });
     moveAll();
-    expect(p.vx).toBeCloseTo(4, 10); // clamp(10 - 0, -4, 4) = 4
+    expect(p.vx).toBeCloseTo(5.2, 10); // clamp(13 - 0, -5.2, 5.2) = 5.2
     expect(p.vy).toBeCloseTo(0, 10);
-    expect(p.x).toBeCloseTo(10 + 4 * DT, 10); // 10.4
+    expect(p.x).toBeCloseTo(10 + 5.2 * DT, 10); // 10.52
     expect(p.y).toBeCloseTo(25, 10);
   });
 
   it("ramps to maxSpeed then drifts down as fatigue accrues", () => {
     // NOTE: maxSpeed depends on fatigue, and fatigue rises by +0.0006/tick once
     // |v| > 6 ft/s. So after the velocity exceeds 6 the achievable max creeps
-    // below the nominal 10. These are exact deterministic values.
+    // below the nominal 13. These are exact deterministic values.
     seedRng(1);
     const p = soloPlayer({ x: 10, y: 25, vx: 0, vy: 0, speed: 50, fatigue: 0, target: { x: 90, y: 25 } });
     moveAll();
-    expect(p.vx).toBeCloseTo(4, 12); // clamp(10-0,-4,4)=4, fatigue still 0
+    expect(p.vx).toBeCloseTo(5.2, 12); // clamp(13-0,-5.2,5.2)=5.2, fatigue still 0
     moveAll();
-    expect(p.vx).toBeCloseTo(8, 12); // +4, now |v|>6 so fatigue -> 0.0006
+    expect(p.vx).toBeCloseTo(10.4, 12); // +5.2, now |v|>6 so fatigue -> 0.0006
     moveAll();
-    // ms now = 10*(1-0.0006*0.18) = 9.99892, vx clamps up to it
-    expect(p.vx).toBeCloseTo(9.99892, 12);
+    // ms now = 13*(1-0.0006*0.18) = 12.998596, vx clamps up to it
+    expect(p.vx).toBeCloseTo(12.998596, 12);
     moveAll();
-    expect(p.vx).toBeCloseTo(9.99784, 12); // ms with fatigue 0.0012
+    expect(p.vx).toBeCloseTo(12.997192, 12); // ms with fatigue 0.0012
     moveAll();
-    expect(p.vx).toBeCloseTo(9.99676, 12); // ms with fatigue 0.0018
+    expect(p.vx).toBeCloseTo(12.995788, 12); // ms with fatigue 0.0018
   });
 
   it("stops within 0.6 ft of target and parks there (arrive)", () => {
@@ -188,8 +188,8 @@ describe("moveAll: steering toward target (arrive behavior)", () => {
     seedRng(3);
     const p = soloPlayer({ x: 50.2, y: 25, vx: 10, vy: 0, speed: 50, fatigue: 0, target: { x: 50, y: 25 } });
     moveAll();
-    // dvx = 0; clamp(0 - 10, -4, 4) = -4 -> vx = 6; then * 0.5 damping -> 3
-    expect(p.vx).toBeCloseTo(3, 10);
+    // dvx = 0; clamp(0 - 10, -5.2, 5.2) = -5.2 -> vx = 4.8; then * 0.5 damping -> 2.4
+    expect(p.vx).toBeCloseTo(2.4, 10);
   });
 });
 
@@ -239,10 +239,10 @@ describe("moveAll: fatigue accrual depends on speed magnitude", () => {
   it("gains fatigue when moving faster than 6 ft/s", () => {
     seedRng(2);
     const p = soloPlayer({ x: 10, y: 25, vx: 0, vy: 0, speed: 100, fatigue: 0.5, target: { x: 90, y: 25 } });
-    // speed=100, fatigue=0.5 -> ms = 18*(1-0.5*0.18) = 18*0.91 = 16.38,
-    // acc*DT = ms*4*0.1 = 6.552; first tick vx clamps to 6.552 (>6) so fatigue rises.
+    // speed=100, fatigue=0.5 -> ms = 24*(1-0.5*0.18) = 24*0.91 = 21.84,
+    // acc*DT = ms*4*0.1 = 8.736; first tick vx clamps to 8.736 (>6) so fatigue rises.
     moveAll();
-    expect(p.vx).toBeCloseTo(6.552, 12);
+    expect(p.vx).toBeCloseTo(8.736, 12);
     expect(p.fatigue).toBeCloseTo(0.5006, 12);
   });
 
@@ -314,7 +314,7 @@ describe("GOLDEN VECTOR: deterministic single-player integration", () => {
   // numbers bit-for-bit. seed and starting conditions are fixed; movement is
   // fully deterministic (no RNG inside moveAll), so these are exact constants.
   //
-  // Setup: speed=50 (ms=10, acc=40, acc*DT=4), fatigue=0, start (10,25),
+  // Setup: speed=50 (ms=13, acc=52, acc*DT=5.2), fatigue=0, start (10,25),
   // target (90,25). Pure +x acceleration ramp then constant velocity.
   it("position/velocity trace over 5 ticks", () => {
     seedRng(0);
@@ -324,19 +324,19 @@ describe("GOLDEN VECTOR: deterministic single-player integration", () => {
       moveAll();
       trace.push({ x: p.x, vx: p.vx });
     }
-    // Velocity ramps +4/tick until it hits maxSpeed; once |v|>6 fatigue grows
-    // +0.0006/tick which shaves maxSpeed slightly below 10 from tick 3 on.
-    // tick1: vx 0->4,        x 10 -> 10.4              (fatigue 0)
-    // tick2: vx 4->8,        x -> 11.2                 (fatigue -> 0.0006)
-    // tick3: vx 8->9.99892,  x -> 12.199892           (fatigue -> 0.0012)
-    // tick4: vx -> 9.99784,  x -> 13.199676           (fatigue -> 0.0018)
-    // tick5: vx -> 9.99676,  x -> 14.199352           (fatigue -> 0.0024)
+    // Velocity ramps +5.2/tick until it hits maxSpeed; once |v|>6 fatigue grows
+    // +0.0006/tick which shaves maxSpeed slightly below 13 from tick 3 on.
+    // tick1: vx 0->5.2,         x 10 -> 10.52           (fatigue 0)
+    // tick2: vx 5.2->10.4,      x -> 11.56              (fatigue -> 0.0006)
+    // tick3: vx -> 12.998596,   x -> 12.8598596        (fatigue -> 0.0012)
+    // tick4: vx -> 12.997192,   x -> 14.1595788        (fatigue -> 0.0018)
+    // tick5: vx -> 12.995788,   x -> 15.4591576        (fatigue -> 0.0024)
     const golden = [
-      { x: 10.4, vx: 4 },
-      { x: 11.200000000000001, vx: 8 },
-      { x: 12.199892000000002, vx: 9.99892 },
-      { x: 13.199676000000002, vx: 9.99784 },
-      { x: 14.199352000000001, vx: 9.99676 },
+      { x: 10.52, vx: 5.2 },
+      { x: 11.559999999999999, vx: 10.4 },
+      { x: 12.859859599999998, vx: 12.998596 },
+      { x: 14.159578799999998, vx: 12.997192 },
+      { x: 15.4591576, vx: 12.995788000000001 },
     ];
     for (let i = 0; i < 5; i++) {
       expect(trace[i].vx).toBeCloseTo(golden[i].vx, 12);
@@ -348,9 +348,9 @@ describe("GOLDEN VECTOR: deterministic single-player integration", () => {
     seedRng(0);
     const p = soloPlayer({ x: 25, y: 25, vx: 0, vy: 0, speed: 50, fatigue: 0, target: { x: 45, y: 45 } });
     moveAll();
-    // dx=dy=20 -> unit (0.7071,0.7071) * ms 10 = desired (7.071,7.071);
-    // clamp(7.071,-4,4)=4 each axis.
+    // dx=dy=20 -> unit (0.7071,0.7071) * ms 13 = desired (9.19,9.19);
+    // clamp(9.19,-5.2,5.2)=5.2 each axis.
     expect(p.vx).toBeCloseTo(p.vy, 12);
-    expect(p.vx).toBeCloseTo(4, 12);
+    expect(p.vx).toBeCloseTo(5.2, 12);
   });
 });
