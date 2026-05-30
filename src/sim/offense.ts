@@ -172,6 +172,10 @@ const LAYUP_BEATEN_GAP = 3.5; // ft: or has lost this much contact with the hand
 const LAYUP_GO_UP_DIST = 5; // ft from rim: at point-blank a beaten driver goes up with it (no "contained" reset)
 const PUTBACK_RANGE = 7; // ft from rim within which a fresh offensive rebound goes back up (matches resolution.ts)
 const PUTBACK_SHOOT_BONUS = 1.5; // shoot-utility bump for an immediate putback off an offensive board
+const BIG_GIVEUP_HANDLE = 62; // handle below which a stranded perimeter big hands off/kicks instead of iso-driving
+const BIG_GIVEUP_DEPTH = 17; // ft from rim beyond which a low-handle big is "stranded out" and gives it back (rolls/flashes inside still finish)
+const BIG_DRIVE_SUPPRESS = 0.2; // multiplier on a give-up big's drive utility (kills the perimeter iso)
+const HANDOFF_PASS_BONUS = 1.6; // pass-utility bump for a give-up big handing it to a capable handler
 
 // Early-clock patience: contested shots are suppressed when the shot clock is
 // full, scaled by (1 - openness). Team pace shifts the bar up (slow) or down
@@ -481,6 +485,15 @@ export function offenseDecide(): void {
     // ramp (kicks in under 10s). Only when a real drive lane exists (dh check).
     if (dh > DRIVE_BASE_DIST_MIN) driveU += urg * DRIVE_URGENCY;
 
+    // A non-creator big who ends up with the ball out away from the basket
+    // shouldn't iso-drive off the bounce (that's where low-handle bigs get
+    // stripped) — he hands it off / kicks it back to a guard instead. He can
+    // still post (postU) or finish a deep catch; only the perimeter iso is killed.
+    // only a big STRANDED out on the perimeter gives it back — a big rolling/
+    // flashing inside POST..GIVEUP_DEPTH still finishes or posts.
+    const giveUpBig = isInsidePlayer(bh) && handleOf(bh) < BIG_GIVEUP_HANDLE && dh > BIG_GIVEUP_DEPTH;
+    if (giveUpBig) driveU *= BIG_DRIVE_SUPPRESS;
+
     // Has the handler beaten his on-ball defender (no longer goal-side, or lost
     // contact)? A beaten driver attacks the rim to finish or draw a foul.
     const onBallBeaten = onBall
@@ -524,7 +537,11 @@ export function offenseDecide(): void {
       // post-feed: a teammate posting near the basket with a physical edge earns a bonus
       const postFeedBonus = postFeedValue(t, def, h);
 
-      const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus
+      // hand-off / give-back: a non-creator big gives it to a capable handler (a
+      // guard cutting off him) to restart the offense rather than holding it.
+      const handoffBonus = giveUpBig && handleOf(t) >= BIG_GIVEUP_HANDLE ? HANDOFF_PASS_BONUS : 0;
+
+      const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus
         - passSelectionPenalty(bh, t, h);
       if (pu > bestPU) {
         bestPU = pu;
