@@ -109,6 +109,7 @@ export type OffBallState = {
   cutY?: number;
   fill?: Point | null;
   relocatedForDrive?: boolean;
+  screenTarget?: Point | null;
 };
 
 export type Player = {
