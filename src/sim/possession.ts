@@ -147,6 +147,18 @@ export function tick(): void {
   if (G.ball.state === "transition") {
     updateTransition();
     moveAll();
+    // Run clocks only while the ball is live (inpass/outlet/advance).
+    // During "score" and "inbound" the game clock is properly stopped.
+    const phase = G.trans?.phase;
+    if (phase === "inpass" || phase === "outlet" || phase === "advance") {
+      G.gameClock -= DT;
+      G.shotClock -= DT;
+      G.possClock += DT;
+      if (G.gameClock <= 0) {
+        endQuarter();
+        return;
+      }
+    }
     return;
   }
   // clocks

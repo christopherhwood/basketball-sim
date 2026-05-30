@@ -62,6 +62,8 @@ export function beginScoreTransition(skipScore: boolean): void {
     p.defLaneT = 0;
   }); // freeze briefly (no stale drift)
   G.trans = { phase: skipScore ? "inbound" : "score", t: 0, scored, inbounder: inb, pg: pg! };
+  G.shotClock = 24;
+  G.possClock = 0;
   const back = scored === "R" ? 1 : -1;
   if (skipScore) {
     inb.x = clamp(inH.x + back * 5, 1, 93);
@@ -213,8 +215,6 @@ function settleHalfCourt(pg: Player): void {
   G.ball.holder = pg;
   pg.hasBall = true;
   G.ball.from = pg;
-  G.shotClock = 24;
-  G.possClock = 0;
   G.decideCD = 6;
   G.actionPhase = "bringup";
   G.actionT = 0;
@@ -271,5 +271,7 @@ export function beginLiveTransition(recoverer: Player, stealStart = false): void
       stealStart,
     };
   }
+  G.shotClock = 24;
+  G.possClock = 0;
   G.ball.state = "transition";
 }
