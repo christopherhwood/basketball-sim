@@ -341,7 +341,7 @@ export function offenseDecide(): void {
         tovP = clamp(tovP, 0, ON_BALL_TOV_CAP);
         if (chance(tovP)) {
           bh.stats.tov++;
-          recordTO("strip");
+          recordTO("strip", bh, dist(bh, h));
           if (chance(STRIP_CLEAN_SHARE)) {
             // clean steal: the on-ball defender takes it and pushes the other way
             onBallDef.stats.stl++;
@@ -628,7 +628,7 @@ export function offenseDecide(): void {
         );
         if (chance(toP)) {
           bh.stats.tov++;
-          recordTO("cutoff");
+          recordTO("cutoff", bh, dh);
           const r = rng();
           if (r < CUTOFF_CHARGE_SHARE) {
             // charge — rare, dead ball
@@ -1476,7 +1476,7 @@ function startPass(from: Player, to: Player): void {
     );
     if (chance(badP)) {
       from.stats.tov++;
-      recordTO("badpass");
+      recordTO("badpass", from, dist(from, hoop()));
       // nearest defender to the intended target recovers the loose ball
       let recover: Player | null = null,
         rd = 1e9,
@@ -1528,7 +1528,7 @@ function startPass(from: Player, to: Player): void {
       if (chance(sp)) {
         d.stats.stl++;
         from.stats.tov++;
-        recordTO("lane");
+        recordTO("lane", from, dist(from, hoop()));
         logEv(`${d.name} jumps the passing lane — steal!`, "to");
         beginLiveTransition(d, true);
         return;
