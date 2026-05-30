@@ -230,9 +230,6 @@ export interface GameState {
   // per-possession PnR roll/pop decision for the screener (undefined until the
   // roll phase decides it): true = pick-and-pop to the arc, false = roll to the rim.
   screenPop?: boolean;
-  // the big chosen to set the ball screen this possession (rotates C/PF, rarely
-  // SF, weighted by screen tendency); cleared at each possession start.
-  screenerPick?: Player | null;
   // a player who just secured an offensive rebound near the rim and should go
   // straight back up with a putback; cleared once he decides.
   putbackBy?: Player | null;

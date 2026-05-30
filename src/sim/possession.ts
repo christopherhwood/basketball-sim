@@ -146,7 +146,6 @@ export function setupPossession(initial: boolean): void {
   G.actionPhase = "bringup";
   G.actionT = 0;
   G.screen = null;
-  G.screenerPick = undefined;
   G.ball.state = "held";
   G.pnrSwitched = false;
   G.driving = false;
