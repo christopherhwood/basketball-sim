@@ -138,6 +138,10 @@ export type Player = {
   helpCommit?: "in" | "out" | null;
   // set on a teammate left open by a committed helper — primes a catch-and-shoot.
   catchShoot?: boolean;
+  // diagnostics only: a short tag of what this player is currently trying to do
+  // off the ball (pnr-roll, post, cut, laneclear, ...). Logged on a 3-second call
+  // so we can see WHICH behavior left him camped in the lane. No gameplay effect.
+  dbgIntent?: string;
 };
 
 export type ShotMeta = {
@@ -226,6 +230,9 @@ export interface GameState {
   // per-possession PnR roll/pop decision for the screener (undefined until the
   // roll phase decides it): true = pick-and-pop to the arc, false = roll to the rim.
   screenPop?: boolean;
+  // the big chosen to set the ball screen this possession (rotates C/PF, rarely
+  // SF, weighted by screen tendency); cleared at each possession start.
+  screenerPick?: Player | null;
   // a player who just secured an offensive rebound near the rim and should go
   // straight back up with a putback; cleared once he decides.
   putbackBy?: Player | null;

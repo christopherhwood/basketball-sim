@@ -61,7 +61,7 @@ export function enforceThreeSeconds(): boolean {
       }
       if (p.offLaneT > rules.threeSecondLimit) {
         p.stats.tov++;
-        recordTO("threesec", p, dist(p, h));
+        recordTO("threesec", p, dist(p, h), p.dbgIntent ?? p.ob?.state ?? "?");
         G.banner = { text: "OFFENSIVE 3 SECONDS", t: 100 };
         logEv(`${p.name} is called for offensive three seconds — turnover`, "to");
         resetThreeSecondTimers();

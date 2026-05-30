@@ -285,6 +285,7 @@ const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/
 const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
 const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
+const SF_SCREEN_MIN = 55; // an SF only enters the ball-screen pool if his screen tendency is at least this
 const SCREEN_CHANCE = 0.004; // per tick: chance an eligible off-ball player enters screen state
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
 const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
@@ -944,6 +945,35 @@ function rimHelp(bh: Player, def: Player[], h: Point): number {
   return clamp(v, 0, 1);
 }
 
+/* Is this player an eligible ball-screen setter? Bigs (C/PF) always; an SF only
+   if he's genuinely a screen-setter. Guards never screen the ball in this set. */
+function screenerEligible(p: Player, bh: Player): boolean {
+  if (p === bh) return false;
+  if (p.pos === "C" || p.pos === "PF") return true;
+  if (p.pos === "SF" && effectiveTendencies(p).screen >= SF_SCREEN_MIN) return true;
+  return false;
+}
+
+/* This possession's ball-screen setter: a screen-tendency-weighted random draw
+   among the eligible bigs (C sets most, PF a good share, a screen-happy SF rarely)
+   — not the single highest-tendency big every time. Falls back to the highest
+   non-handler if no big qualifies. */
+function chooseScreener(off: Player[], bh: Player): Player {
+  const cands = off.filter((p) => screenerEligible(p, bh));
+  if (cands.length === 0) {
+    return off
+      .filter((p) => p !== bh)
+      .reduce((b, p) => (effectiveTendencies(p).screen > effectiveTendencies(b).screen ? p : b));
+  }
+  const weights = cands.map((p) => Math.max(1, effectiveTendencies(p).screen));
+  let r = rng() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < cands.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return cands[i];
+  }
+  return cands[cands.length - 1];
+}
+
 /* primary action: pick & roll or motion, plus off-ball movement for everyone. */
 function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   const dir = G.attackHoop === "R" ? -1 : 1;
@@ -957,21 +987,20 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
   }
 
   if (tac.action === "pnr") {
-    // pick the eligible big with the highest screen tendency; fall back to role/off[4]
-    let screener = off.find((p) => p.role === "screener") || off[4];
-    let bestScreen = screener === bh ? -1 : effectiveTendencies(screener).screen;
-    for (const p of off) {
-      if (p === bh) continue;
-      const sc = effectiveTendencies(p).screen;
-      if (sc > bestScreen) {
-        bestScreen = sc;
-        screener = p;
-      }
+    // Pick the screener ONCE per possession and reuse it — rotating among the bigs
+    // (C/PF, rarely a screen-happy SF) weighted by screen tendency, so it isn't the
+    // same man every time. Safe now that a non-screening big still gets off-ball
+    // movement (no orphan camped in the lane) and a stranded big hands it back.
+    let screener = G.screenerPick && off.includes(G.screenerPick) && G.screenerPick !== bh ? G.screenerPick : null;
+    if (!screener) {
+      screener = chooseScreener(off, bh);
+      G.screenerPick = screener;
     }
     if (G.actionPhase === "bringup") {
       bh.target = { x: h.x + dir * 21, y: 25 };
       // come UP to the level of the screen from the interior, not from the arc
       screener.target = { x: h.x + dir * 13, y: 30 };
+      screener.dbgIntent = "pnr-bringup";
       G.screen = { ball: bh, screener };
       G.screenPop = undefined; // fresh roll/pop decision each possession
       if (G.possClock > 1.6) {
@@ -979,6 +1008,7 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
       }
     } else if (G.actionPhase === "screen") {
       screener.target = { x: bh.x + dir * 1.5, y: bh.y - 5 };
+      screener.dbgIntent = "pnr-screen";
       G.screen = { ball: bh, screener };
       if (dist(screener, bh) < 5 && G.possClock > 2.6) {
         G.actionPhase = "roll";
@@ -995,13 +1025,18 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
       if (G.screenPop) {
         // pop BEYOND the arc for a genuine three (not a long two)
         screener.target = { x: h.x + dir * POP_OUT_DEPTH, y: 30 };
+        screener.dbgIntent = "pnr-pop";
       } else {
         // roll/short: reset to an inside spot — do NOT jog back out to the arc
         screener.target = legalInsideHome(screener, h, dir);
+        screener.dbgIntent = "pnr-roll";
       }
       G.screen = { ball: bh, screener };
     }
-    if (shouldClearLane(screener, h)) screener.target = laneClearSpot(screener, screener.target || screener, h, dir);
+    if (shouldClearLane(screener, h)) {
+      screener.target = laneClearSpot(screener, screener.target || screener, h, dir);
+      screener.dbgIntent = "laneclear";
+    }
     if (screener.target) screener.target = clampInteriorTarget(screener.target);
   } else {
     G.screen = null;
@@ -1171,7 +1206,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
   const movers: Player[] = [];
   for (const p of off) {
     if (p === bh) continue;
-    if (tac.action === "pnr" && (p.role === "screener" || G.screen?.screener === p)) continue; // screener owned by pnr logic
+    if (tac.action === "pnr" && G.screen?.screener === p) continue; // the ACTUAL screener is owned by pnr logic; a non-screening big (e.g. when the screener rotates) must still get off-ball movement, not be orphaned in the lane
     movers.push(p);
   }
   const bigs = movers.filter(isInsidePlayer);
@@ -1221,6 +1256,8 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     // what accrues offensive three-seconds when a possession runs long.
     if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 15 : 35 };
     const spacingOptions = inside ? insideSpots : perimeterSpots;
+    // default intent tag = current off-ball state; refined below for the spacing read
+    p.dbgIntent = ob.state;
 
     // --- cut in progress ---
     if (ob.state === "cut") {
@@ -1283,6 +1320,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     const triggerFired = shouldClearLane(p, h) || justPassed || (driving && !ob.relocatedForDrive);
 
     let tgt: Point = { x: home.x, y: home.y };
+    p.dbgIntent = shouldClearLane(p, h) ? "laneclear" : postThreat ? "post" : inside ? "space-inside" : "space-perim";
     if (shouldClearLane(p, h)) {
       tgt = laneClearSpot(p, home, h, dir);
     } else if (driving) {
