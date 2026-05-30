@@ -43,9 +43,24 @@ function trackingQuality(d: Player, m: Player, h: Point): number {
 
 export function offBallDefensiveTarget(d: Player, m: Player, h: Point): Point {
   const gap = 3 + (1 - threat(m)) * 3;
+  // Sit on the line between man and ball ("on the line, up the line") so the
+  // defender can see both. Blend 15% toward ball / 85% toward basket to shift
+  // positioning ball-side without sitting fully in passing lanes.
+  const bx = G.ball.x,
+    by = G.ball.y;
+  const manToBall = Math.hypot(bx - m.x, by - m.y) || 1;
+  const manToHoop = Math.max(dist(m, h), 1);
+  const ballBase = {
+    x: lerp(m.x, bx, gap / manToBall),
+    y: lerp(m.y, by, gap / manToBall),
+  };
+  const hoopBase = {
+    x: lerp(m.x, h.x, gap / manToHoop),
+    y: lerp(m.y, h.y, gap / manToHoop),
+  };
   const base = {
-    x: lerp(m.x, h.x, gap / Math.max(dist(m, h), 1)),
-    y: lerp(m.y, h.y, gap / Math.max(dist(m, h), 1)),
+    x: lerp(hoopBase.x, ballBase.x, 0.15),
+    y: lerp(hoopBase.y, ballBase.y, 0.15),
   };
   const moverSpeed = Math.hypot(m.vx, m.vy);
   const moving = clamp((moverSpeed - OFFBALL_TRACK_SPEED_START) / OFFBALL_TRACK_SPEED_RANGE, 0, 1);
@@ -87,6 +102,9 @@ export function defenseMove(): void {
     return;
   }
 
+  // On-ball lookahead: aim for where the handler will be, not where he is.
+  const LOOKAHEAD = 0.2; // seconds
+
   // MAN defense
   for (const d of def) {
     const m = d.assign;
@@ -100,12 +118,15 @@ export function defenseMove(): void {
           y: m.y + (h.y - m.y) * 0.16 * 0.6,
         }
       : offBallDefensiveTarget(d, m, h);
-    // keep on-ball defender right on the handler at the pressure distance
+    // keep on-ball defender at the pressure distance, aimed at the man's
+    // predicted position so the defender meets a driver instead of trailing
     if (onBall) {
-      const dx = m.x - h.x,
-        dy = m.y - h.y,
+      const predX = m.x + m.vx * LOOKAHEAD;
+      const predY = m.y + m.vy * LOOKAHEAD;
+      const dx = predX - h.x,
+        dy = predY - h.y,
         dd = Math.hypot(dx, dy) || 1;
-      d.target = { x: m.x - (dx / dd) * presDist * 0.5, y: m.y - (dy / dd) * presDist * 0.5 };
+      d.target = { x: predX - (dx / dd) * presDist * 0.5, y: predY - (dy / dd) * presDist * 0.5 };
     }
     if (!onBall && shouldClearDefensiveLane(d, off, h)) {
       const side = d.y < 25 ? -1 : 1;

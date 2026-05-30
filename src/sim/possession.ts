@@ -2,7 +2,7 @@ import { HOOP, COURT_L, DT } from "../core/constants.js";
 import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
-import { moveAll } from "./movement.js";
+import { moveAll, moveTeam } from "./movement.js";
 import { offenseDecide, isInsidePlayer } from "./offense.js";
 import { defenseMove } from "./defense.js";
 import { resolveShot, updateFreeThrows } from "./resolution.js";
@@ -225,8 +225,16 @@ export function tick(): void {
     return; // dead ball: other team inbounds from the baseline
   }
 
+  // Offense integrates first so defense reads up-to-date offensive positions
+  // this tick (eliminates the built-in 0.1 s lag).
+  moveTeam(offTeam());
   defenseMove();
-  moveAll();
+  moveTeam(defTeam());
+  // ball follows holder after everyone has moved
+  if (G.ball.state === "held" && G.ball.holder) {
+    G.ball.x = G.ball.holder.x;
+    G.ball.y = G.ball.holder.y;
+  }
 }
 
 function endQuarter(): void {

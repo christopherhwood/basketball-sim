@@ -16,8 +16,8 @@ export function maxSpeed(p: Player): number {
 const ARRIVE_SLOW_R = 4.0; // ft: begin decelerating within this radius
 const ARRIVE_STOP_R = 0.3; // ft: zero desired speed inside this
 
-export function moveAll(): void {
-  for (const p of players()) {
+export function moveTeam(team: Player[]): void {
+  for (const p of team) {
     if (!p.target) {
       p.vx *= 0.7;
       p.vy *= 0.7;
@@ -45,6 +45,10 @@ export function moveAll(): void {
     p.y = clamp(p.y + p.vy * DT, 1, COURT_W - 1);
     p.fatigue = clamp(p.fatigue + (Math.hypot(p.vx, p.vy) > 6 ? 0.0006 : -0.0004), 0, 1);
   }
+}
+
+export function moveAll(): void {
+  moveTeam(players());
   // ball follows holder
   if (G.ball.state === "held" && G.ball.holder) {
     G.ball.x = G.ball.holder.x;
