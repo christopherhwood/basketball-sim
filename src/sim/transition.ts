@@ -8,6 +8,12 @@ import { effectiveTendencies } from "./tendency.js";
 import type { Player, Point } from "../types.js";
 
 const STEAL_REACTION_DELAY = 0.35;
+// Controlled bring-up: even when there's no fast break, walking the ball up and
+// surveying the defense takes a beat. The half-court set won't start until at
+// least this many seconds have elapsed (a guard reaches the top in ~1.5s at full
+// speed, then reads the floor), so possessions don't start their offense the
+// instant the ball crosses half court. Keeps pace realistic (~3-4s to initiate).
+const BRINGUP_MIN_T = 3.4;
 const FASTBREAK_RECOVERY_BASE = 0.16;
 const FASTBREAK_RECOVERY_SPEED_SLOPE = 0.012;
 const FASTBREAK_RECOVERY_DEF_SLOPE = 0.06;
@@ -196,7 +202,7 @@ export function updateTransition(): void {
       if (!m || (tr.stealStart && tr.t < STEAL_REACTION_DELAY)) return;
       d.target = fastBreakRecoveryTarget(d, m, atk, m === tr.pg);
     });
-    if (dist(tr.pg, top) < 6 || tr.t > 9) {
+    if ((dist(tr.pg, top) < 6 && tr.t >= BRINGUP_MIN_T) || tr.t > 9) {
       settleHalfCourt(tr.pg);
     }
   }
