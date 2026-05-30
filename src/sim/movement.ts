@@ -16,13 +16,40 @@ export function maxSpeed(p: Player): number {
 const ARRIVE_SLOW_R = 4.0; // ft: begin decelerating within this radius
 const ARRIVE_STOP_R = 0.3; // ft: zero desired speed inside this
 
+const SEP_RADIUS = 3.5; // ft; same-team players within this distance trigger repulsion
+const SEP_WEIGHT = 0.4; // fraction of maxSpeed applied as max separation magnitude
+
+function separationDelta(p: Player, ms: number): [number, number] {
+  if (p.hasBall) return [0, 0];
+  let sx = 0,
+    sy = 0;
+  for (const other of players()) {
+    if (other === p || other.team !== p.team) continue;
+    const odx = p.x - other.x,
+      ody = p.y - other.y;
+    const od = Math.hypot(odx, ody) || 1;
+    if (od < SEP_RADIUS) {
+      const strength = (SEP_RADIUS - od) / SEP_RADIUS;
+      sx += (odx / od) * strength;
+      sy += (ody / od) * strength;
+    }
+  }
+  const rawSep = Math.hypot(sx, sy);
+  const sepCap = ms * SEP_WEIGHT;
+  const scale = rawSep > 0 ? Math.min(rawSep * ms, sepCap) / rawSep : 0;
+  return [sx * scale, sy * scale];
+}
+
 export function moveTeam(team: Player[]): void {
   for (const p of team) {
+    const ms = maxSpeed(p);
     if (!p.target) {
       p.vx *= 0.7;
       p.vy *= 0.7;
+      const [sx, sy] = separationDelta(p, ms);
+      p.vx += sx * DT;
+      p.vy += sy * DT;
     } else {
-      const ms = maxSpeed(p);
       const dx = p.target.x - p.x,
         dy = p.target.y - p.y,
         d = Math.hypot(dx, dy) || 1;
@@ -33,8 +60,9 @@ export function moveTeam(team: Player[]): void {
       const dvx = (dx / d) * desv,
         dvy = (dy / d) * desv,
         acc = ms * 4;
-      p.vx += clamp(dvx - p.vx, -acc * DT, acc * DT);
-      p.vy += clamp(dvy - p.vy, -acc * DT, acc * DT);
+      const [sx, sy] = separationDelta(p, ms);
+      p.vx += clamp(dvx + sx - p.vx, -acc * DT, acc * DT);
+      p.vy += clamp(dvy + sy - p.vy, -acc * DT, acc * DT);
       // bleed residual velocity right at the target to kill micro-oscillation
       if (d < ARRIVE_STOP_R * 2) {
         p.vx *= 0.5;
