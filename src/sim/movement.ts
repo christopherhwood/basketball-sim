@@ -16,8 +16,8 @@ export function maxSpeed(p: Player): number {
 const ARRIVE_SLOW_R = 4.0; // ft: begin decelerating within this radius
 const ARRIVE_STOP_R = 0.3; // ft: zero desired speed inside this
 
-const SEP_RADIUS = 3.5; // ft; same-team players within this distance trigger repulsion
-const SEP_WEIGHT = 0.4; // fraction of maxSpeed applied as max separation magnitude
+const SEP_RADIUS = 2.5; // ft; same-team players within this distance trigger repulsion
+const SEP_WEIGHT = 0.18; // fraction of maxSpeed applied as max separation magnitude
 
 function separationDelta(p: Player, ms: number): [number, number] {
   if (p.hasBall) return [0, 0];
