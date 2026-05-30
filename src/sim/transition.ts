@@ -70,6 +70,7 @@ export function beginScoreTransition(skipScore: boolean): void {
   G.trans = { phase: skipScore ? "inbound" : "score", t: 0, scored, inbounder: inb, pg: pg! };
   G.shotClock = 24;
   G.possClock = 0;
+  G.holdT = 0;
   const back = scored === "R" ? 1 : -1;
   if (skipScore) {
     inb.x = clamp(inH.x + back * 5, 1, 93);
@@ -279,5 +280,6 @@ export function beginLiveTransition(recoverer: Player, stealStart = false): void
   }
   G.shotClock = 24;
   G.possClock = 0;
+  G.holdT = 0;
   G.ball.state = "transition";
 }

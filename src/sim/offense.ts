@@ -1,10 +1,11 @@
 import { DT, ARC_R, COURT_L } from "../core/constants.js";
 import { dist, clamp, lerp, chance, randn, shotTypeFor, distToSeg } from "../core/math.js";
+import { rng } from "../core/rng.js";
 import { G, offTeam, defTeam, hoop, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { threat } from "./defense.js";
 import { attemptShot } from "./resolution.js";
-import { beginLiveTransition } from "./transition.js";
+import { beginLiveTransition, beginScoreTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
@@ -217,6 +218,37 @@ const CUT_EARLY_CLOCK_T = 12; // shot-clock seconds above which the early-clock 
 const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right after passing (give-and-go)
 const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
 const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
+
+// Ball-holder patience: when the handler's best look is a mediocre pass (nobody
+// is open) and there's time on the clock, he holds/probes instead of forcing it,
+// letting off-ball men cut/relocate and a screener come to him.
+const HOLD_GO_THRESHOLD = 1.4; // max(shootU,driveU) below this = no compelling attack → consider holding
+const HOLD_PASS_QUALITY = 1.0; // bestPU below this = no real look yet → consider holding
+const HOLD_MIN_CLOCK = 9; // never hold once the shot clock is under this (urgency takes over)
+const HOLD_MAX_T = 1.0; // cap on cumulative hold/probe time per possession (short beat of motion, then take the best look)
+const HOLD_SCREEN_DELAY = 0.8; // seconds of holding before calling for a ball screen (let cutters move first)
+const HOLD_SCREEN_CHANCE = 0.4; // when holding past the delay, chance to call a screen vs. dribble out/reset
+const HOLD_RESET_CLOCK_HI = 15; // a guard/playmaker resets (dribbles back out) inside this shot-clock window
+const HOLD_RESET_CLOCK_LO = 11;
+const HOLD_CUT_CHANCE = 0.05; // per-decision chance a weak-side man makes a basket cut during a hold
+const CUTOFF_AHEAD = 5.5; // ft ahead of the driver a defender must be to cut off the drive
+const CUTOFF_WIDTH = 3.0; // ft lateral half-width of the driving lane for a cutoff
+// On-ball cutoff is a matchup roll: defender containment (perimD/speed/iq) vs
+// handler attack (handle/speed/iq). Base ~0.5 (even matchup contained half the
+// time); an elite handler vs a poor defender drops toward CUTOFF_P_MIN (blows by
+// most of the time), a weak handler vs a stopper rises toward CUTOFF_P_MAX.
+const CUTOFF_BASE_P = 0.5;
+const CUTOFF_PERIMD_W = 0.012; // per point of (defender perimD - handler handle)
+const CUTOFF_SPEED_W = 0.01; // per point of (defender speed - handler speed)
+const CUTOFF_IQ_W = 0.004; // per point of (defender iq - handler iq)
+const CUTOFF_P_MIN = 0.1; // elite handlers still get walled occasionally
+const CUTOFF_P_MAX = 0.85; // even weak handlers split a set defense sometimes
+const CUTOFF_TO_BASE = 0.012; // base turnover chance once a drive is actually cut off (mostly the handler just picks it up)
+const CUTOFF_TO_SPEED_SLOPE = 0.002; // faster into the wall → a bit more likely to charge/lose it
+const CUTOFF_TO_HANDLE_SLOPE = 1 / 260; // a good handle reduces the cutoff turnover
+const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/charges are rare; bad-pass TOs live elsewhere)
+const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
+const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
 const SCREEN_CHANCE = 0.004; // per tick: chance an eligible off-ball player enters screen state
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
@@ -491,6 +523,65 @@ export function offenseDecide(): void {
       }
     }
 
+    // Drive cutoff: a defender has stepped into the driver's near path. Whether
+    // the drive actually dies depends on the MATCHUP when it's the on-ball man —
+    // a quick, high-handle, high-IQ guard beats a slow / poor / low-IQ defender
+    // most of the time (he is NOT cut off and drives on to finish); a weak
+    // handler against a good defender is contained most of the time. A help
+    // rotator in the lane is a genuine second wall and always cuts it off.
+    // When cut off, the handler picks up to kick/pull up/reset; charging into a
+    // set defender turns it over some of the time (mostly a live strip; charges
+    // and travels are rare dead balls).
+    if (G.driving && dh < LAYUP_ATTACK_DIST) {
+      const cutoffDef = driveCutOff(bh, def, h);
+      let contained = false;
+      if (cutoffDef) {
+        if (cutoffDef.assign === bh) {
+          // on-ball: resolve the beat-your-man matchup ONCE per drive so it
+          // doesn't re-roll every tick. Once beaten, he stays beaten this drive.
+          if (G.driveBeaten === undefined) {
+            const edge =
+              (cutoffDef.attr.perimD - handleOf(bh)) * CUTOFF_PERIMD_W +
+              (cutoffDef.attr.speed - bh.attr.speed) * CUTOFF_SPEED_W +
+              (cutoffDef.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
+            G.driveBeaten = !chance(clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX));
+          }
+          contained = !G.driveBeaten;
+        } else {
+          contained = true; // help defender walling the lane is a genuine second wall
+        }
+      }
+      if (cutoffDef && contained) {
+        G.driving = false;
+        const driveSpeed = Math.hypot(bh.vx, bh.vy);
+        const toP = clamp(
+          CUTOFF_TO_BASE + driveSpeed * CUTOFF_TO_SPEED_SLOPE - (handleOf(bh) - 60) * CUTOFF_TO_HANDLE_SLOPE,
+          0,
+          CUTOFF_TO_CAP,
+        );
+        if (chance(toP)) {
+          bh.stats.tov++;
+          const r = rng();
+          if (r < CUTOFF_CHARGE_SHARE) {
+            // charge — rare, dead ball
+            logEv(`${cutoffDef.name} draws a charge on ${bh.name} — offensive foul, turnover`, "to");
+            beginScoreTransition(true);
+          } else if (r < CUTOFF_CHARGE_SHARE + CUTOFF_TRAVEL_SHARE) {
+            // picked up his dribble in traffic and travels — dead ball
+            logEv(`${bh.name} gets cut off and travels — turnover`, "to");
+            beginScoreTransition(true);
+          } else {
+            // most common: cut off and stripped — live, runs the other way
+            cutoffDef.stats.stl++;
+            logEv(`${cutoffDef.name} cuts off the drive and strips ${bh.name} — steal!`, "to");
+            beginLiveTransition(cutoffDef, true);
+          }
+          return;
+        }
+        driveU = -1;
+      }
+    }
+
     // Wide open but not in clean rhythm to shoot (or out past the line): attack
     // the developing closeout instead of resetting the ball back out.
     if (wideOpen) {
@@ -506,6 +597,26 @@ export function offenseDecide(): void {
     if (postU > 0) postU += randn() * noise;
 
     const best = Math.max(shootU, driveU, passU, postU);
+
+    // Patience: if the best available is only a so-so pass (nobody has a real
+    // look) and there's time, hold and probe instead of forcing it — invite a
+    // ball screen and let the off-ball men keep moving. A better option next
+    // cycle (a cut comes open, a screen frees a drive) ends the hold naturally.
+    const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
+    const noGoodPass = bestPU < HOLD_PASS_QUALITY;
+    const wantHold =
+      noGoodAttack &&
+      noGoodPass &&
+      best !== postU &&
+      G.shotClock > HOLD_MIN_CLOCK &&
+      (G.holdT ?? 0) < HOLD_MAX_T;
+    if (wantHold) {
+      G.holdT = (G.holdT ?? 0) + 0.4;
+      G.driving = false;
+      holdAndProbe(bh, off, def, h);
+      return;
+    }
+
     if (best === postU && postU > 0) {
       G.driving = false;
       postUp(bh, postDef!, contest, postEdge);
@@ -514,6 +625,7 @@ export function offenseDecide(): void {
       bh.catchShoot = false;
       attemptShot(bh, type, contest, pts, mp);
     } else if (best === driveU) {
+      if (!G.driving) G.driveBeaten = undefined; // fresh drive → re-roll the matchup next tick
       G.driving = true;
       bh.target = { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.60) };
     } else if (bestPass) {
@@ -523,6 +635,120 @@ export function offenseDecide(): void {
       G.driving = false;
       attemptShot(bh, type, contest, pts, mp);
     } // nothing better, just shoot
+  }
+}
+
+/* Drive cutoff: returns the defender who has stepped into the driver's near path
+   — goal-side, just ahead, inside the lane corridor — walling off the drive, or
+   null if the lane ahead is clear. This includes the on-ball defender: if he's
+   still in front (not beaten) he cuts the drive off himself; a beaten man is
+   behind the ball (along < 0) and is naturally ignored. */
+function driveCutOff(bh: Player, def: Player[], h: Point): Player | null {
+  const dx = h.x - bh.x,
+    dy = h.y - bh.y,
+    len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len,
+    uy = dy / len;
+  let nearest: Player | null = null,
+    nearestAlong = 1e9;
+  for (const d of def) {
+    const tx = d.x - bh.x,
+      ty = d.y - bh.y;
+    const along = tx * ux + ty * uy; // how far ahead toward the rim
+    if (along < 0.5 || along > CUTOFF_AHEAD) continue;
+    const perp = Math.abs(tx * uy - ty * ux);
+    if (perp < CUTOFF_WIDTH && along < nearestAlong) {
+      nearestAlong = along;
+      nearest = d;
+    }
+  }
+  return nearest;
+}
+
+/* Dribble out / around the perimeter toward whichever perimeter spot is most
+   open, so the handler probes a new angle instead of standing or forcing it.
+   Eases toward the target so it reads as a live dribble, not a teleport. */
+function perimeterDribbleTarget(bh: Player, def: Player[], h: Point, dir: number): Point {
+  const R = 23;
+  const cands: Point[] = [
+    { x: h.x + dir * R, y: 25 }, // top
+    { x: h.x + dir * (R * 0.62), y: 9 }, // left wing
+    { x: h.x + dir * (R * 0.62), y: 41 }, // right wing
+  ];
+  let best = cands[0],
+    bestOpen = -1;
+  for (const c of cands) {
+    if (dist(bh, c) < 4) continue; // skip where he already is
+    const { dd } = nearestDef(c as Player, def);
+    if (dd > bestOpen) {
+      bestOpen = dd;
+      best = c;
+    }
+  }
+  return { x: lerp(bh.x, best.x, 0.35), y: lerp(bh.y, best.y, 0.35) };
+}
+
+/* Patience hold: with no compelling attack, the handler keeps his dribble and
+   either (a) dribbles out / around the top to find a new angle — the natural
+   reset a guard makes around 12-15s on the clock — or (b) calls a teammate over
+   for a ball screen. Meanwhile a weak-side man may cut. The next decision cycle
+   reacts to whatever opens, so we never force a bad pass. */
+function holdAndProbe(bh: Player, off: Player[], def: Player[], h: Point): void {
+  const dir = G.attackHoop === "R" ? -1 : 1;
+  const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+  const noLane = !isLaneClear(bh, def, h);
+  const held = G.holdT ?? 0;
+
+  // A guard/primary playmaker resets the offense around 12-15s: dribble back out
+  // toward the top to reset spacing and start a second action.
+  const resetWindow = G.shotClock <= HOLD_RESET_CLOCK_HI && G.shotClock >= HOLD_RESET_CLOCK_LO;
+  const playmaker = bh.role === "handler" || bh.attr.pass >= 70;
+
+  // Decide between calling a screen and dribbling out. Screens only after a beat
+  // of motion and when there's genuinely no lane; otherwise just move the ball.
+  const callScreen = noLane && held > HOLD_SCREEN_DELAY && !resetWindow && chance(HOLD_SCREEN_CHANCE);
+
+  let screener: Player | null = null;
+  if (callScreen) {
+    let bestScreen = -1;
+    for (const p of off) {
+      if (p === bh || p.ob?.state === "cut") continue;
+      const sc = effectiveTendencies(p).screen;
+      if (sc > bestScreen) {
+        bestScreen = sc;
+        screener = p;
+      }
+    }
+    if (screener && screener.ob && onBall) {
+      const ddx = onBall.x - bh.x,
+        ddy = onBall.y - bh.y,
+        dd = Math.hypot(ddx, ddy) || 1;
+      screener.ob.state = "screen";
+      screener.ob.t = 0;
+      screener.ob.screenTarget = { x: onBall.x + (ddx / dd) * SCREEN_SET_DIST, y: clamp(onBall.y + (ddy / dd) * SCREEN_SET_DIST, 4, 46) };
+    }
+    bh.target = { x: bh.x, y: bh.y }; // hold position for the screen to arrive
+  } else if (resetWindow && playmaker) {
+    // reset: dribble back out to the top of the key
+    bh.target = { x: lerp(bh.x, h.x + dir * 24, 0.45), y: lerp(bh.y, 25, 0.4) };
+  } else {
+    // dribble out / around the perimeter toward the most open spot for a new angle
+    bh.target = perimeterDribbleTarget(bh, def, h, dir);
+  }
+
+  // occasional basket cut from a weak-side perimeter man to create movement
+  if (chance(HOLD_CUT_CHANCE)) {
+    for (const p of off) {
+      if (p === bh || p === screener || isInsidePlayer(p) || !p.ob || p.ob.state !== "space") continue;
+      const cf = tendencyFactor(effectiveTendencies(p).driveRim);
+      if (chance(cf * 0.5)) {
+        p.ob.state = "cut";
+        p.ob.t = 0;
+        p.ob.cutY = p.y < 25 ? 19 : 31;
+        p.target = { x: h.x + dir * 2.5, y: p.ob.cutY };
+        break;
+      }
+    }
   }
 }
 
