@@ -135,7 +135,15 @@ export function defenseMove(): void {
       const dx = predX - h.x,
         dy = predY - h.y,
         dd = Math.hypot(dx, dy) || 1;
-      d.target = { x: predX - (dx / dd) * presDist * 0.5, y: predY - (dy / dd) * presDist * 0.5 };
+      // Sag off a low-perimeter-threat handler (won't shoot from out here, can't
+      // blow by) — drop toward help. Only out away from the rim; a slow defender
+      // gives a touch more cushion so he isn't beaten off the dribble.
+      const depth = dist(m, h);
+      const outside = clamp((depth - SAG_MIN_DEPTH) / SAG_DEPTH_RANGE, 0, 1);
+      const slow = clamp((SAG_SPEED_PIVOT - d.attr.speed) / 40, 0, 1) * SAG_SLOW_MAX;
+      const sagDist = (SAG_MAX * (1 - perimeterThreat(m)) + slow) * outside;
+      const cushion = presDist * 0.5 + sagDist;
+      d.target = { x: predX - (dx / dd) * cushion, y: predY - (dy / dd) * cushion };
     }
     if (!onBall && shouldClearDefensiveLane(d, off, h)) {
       const side = d.y < 25 ? -1 : 1;
@@ -290,3 +298,21 @@ export function threat(p: Player): number {
   // 0..1 how much you must respect this man
   return clamp((p.attr.three * 0.6 + p.attr.mid * 0.2 + p.attr.finishing * 0.2 - 40) / 55, 0, 1);
 }
+
+// On-ball SAG: how much the on-ball defender must respect a man WITH THE BALL out
+// on the perimeter — his shooting (will he take the open jumper) plus his ability
+// to blow by (handle/speed). Note this excludes finishing: a back-to-the-basket
+// big who dunks but won't shoot or drive from 20 ft gets sagged off out there.
+export function perimeterThreat(p: Player): number {
+  const handle = Math.max(p.attr.handleLeft, p.attr.handleRight);
+  return clamp(
+    (p.attr.three * 0.5 + p.attr.mid * 0.2 + handle * 0.2 + p.attr.speed * 0.1 - 40) / 55,
+    0,
+    1,
+  );
+}
+const SAG_MAX = 4.0; // ft of extra cushion the on-ball defender gives a zero-perimeter-threat handler
+const SAG_MIN_DEPTH = 10; // ft from rim: no sag at the rim, full sag fades in beyond this
+const SAG_DEPTH_RANGE = 12; // ft over which the outside-the-rim sag fades to full
+const SAG_SPEED_PIVOT = 70; // defender speed below which he sags a bit more (can't pressure safely)
+const SAG_SLOW_MAX = 1.5; // ft of extra cushion for a very slow on-ball defender
