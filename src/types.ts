@@ -241,6 +241,10 @@ export interface GameState {
   lastShooter?: Player;
   lastAssist?: Player | null;
   pendingAssist?: Player | null;
+  // possClock at the moment the assist-eligible pass was caught — an assist only
+  // counts if the basket follows the catch promptly (a direct result of the pass,
+  // not a bucket the catcher created for himself after holding/dribbling).
+  assistCatchT?: number;
   scoreFlash?: ScoreFlash;
   banner?: Banner;
   ft?: FreeThrowState | null;

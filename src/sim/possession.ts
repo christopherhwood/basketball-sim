@@ -17,9 +17,26 @@ import type { HoopSide, Point, Player } from "../types.js";
    band where long caroms and kick-outs land. Defenders box out by holding
    goalside of their man — distributing rather than collapsing onto the rim. */
 
-// Settle beat after a catch: ticks a catcher waits before his first decision, so
-// the ball gets HELD/surveyed instead of instantly swung hand-to-hand. ~0.5s.
-const CATCH_SETTLE_CD = 4;
+// Settle beat after a catch: ticks (×0.1s) a catcher waits before his first
+// decision. It's a RANGE around a base, shortened by a crisp feed (passer's pass
+// rating), the catcher's ball skill (can do something with it immediately), and
+// his IQ (reads the floor fast); lengthened by the opposites. Clamped so even an
+// elite in-rhythm catch keeps a readable beat and a gather doesn't stall forever.
+const SETTLE_BASE = 4.5;
+const SETTLE_PASS_W = 0.04; // per pt of passer pass above 70 → quicker (in-rhythm feed)
+const SETTLE_HANDLE_W = 0.03; // per pt of catcher handle above 70 → quicker
+const SETTLE_IQ_W = 0.03; // per pt of catcher iq above 70 → quicker
+const SETTLE_MIN = 3; // 0.3s floor — keeps the offense announceable
+const SETTLE_MAX = 7; // 0.7s ceiling — a tough gather
+function catchSettle(passer: Player | null | undefined, recv: Player): number {
+  const handle = Math.max(recv.attr.handleLeft, recv.attr.handleRight);
+  const raw =
+    SETTLE_BASE -
+    ((passer?.attr.pass ?? 70) - 70) * SETTLE_PASS_W -
+    (handle - 70) * SETTLE_HANDLE_W -
+    (recv.attr.iq - 70) * SETTLE_IQ_W;
+  return clamp(Math.round(raw), SETTLE_MIN, SETTLE_MAX);
+}
 
 // Bigs crash to the near-block area
 const CONV_BIG_DIST_FROM_HOOP = 6.5;   // ft from hoop for inside rebound position
@@ -213,10 +230,12 @@ export function tick(): void {
       G.ball.hy = undefined;
       G.ball.bspeed = undefined;
       G.pendingAssist = G.ball.from;
+      G.assistCatchT = G.possClock;
       // Settle beat: a catcher surveys before acting instead of instantly swinging
-      // the ball along — keeps the offense readable (the ball gets HELD) rather
-      // than pinging hand-to-hand every fraction of a second.
-      G.decideCD = CATCH_SETTLE_CD;
+      // the ball along — keeps the offense readable. The beat is a RANGE: a crisp
+      // pass from a good passer to a skilled, high-IQ catcher arrives in rhythm
+      // (quick action); a sloppy feed to a low-skill player forces a gather (slow).
+      G.decideCD = catchSettle(G.ball.from, r);
     }
   } else if (G.ball.state === "shot") {
     G.ball.flight++;
