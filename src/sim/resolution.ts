@@ -371,7 +371,10 @@ export function beginFouled(sh: Player, type: ShotType, pts: number, andOne: boo
     sh.stats.fga++;
     if (type === "rim" || type === "close") sh.stats.rimFga++;
     sh.stats.fgm++;
-    if (type === "three") sh.stats.tpm++;
+    if (type === "three") {
+      sh.stats.tpa++; // a made three on an and-one must also count the attempt
+      sh.stats.tpm++;
+    }
     sh.stats.pts += pts;
     G.score[sh.team] += pts;
     if (G.lastAssist && G.lastAssist !== sh && G.lastAssist.team === sh.team) G.lastAssist.stats.ast++;

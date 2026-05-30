@@ -195,6 +195,8 @@ const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right afte
 const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
 const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
 const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
+const SPACE_DWELL_MIN = 1.5; // seconds a player holds its spot after each relocation before re-evaluating
+const RETARGET_MIN_SHIFT = 2.5; // ft: ignore retarget if new target is closer than this to current
 const TARGET_MIN_PERIMETER_DIST = 12; // classic motion spacing: keep perimeter slots a full gap apart
 const TARGET_MIN_INTERIOR_DIST = 7.5; // interior players can be closer, but not stacked
 const TARGET_MIN_MIXED_DIST = 9.5; // one inside / one perimeter needs a passing lane gap
@@ -656,6 +658,7 @@ function targetScore(
   for (const d of def) nearestDef = Math.min(nearestDef, dist(d, candidate));
 
   let score = nearestDef * 0.35 - dist(candidate, preferred) * 0.75;
+  score += p.target ? -dist(candidate, p.target) * 0.4 : 0;
   for (const r of reserved) {
     const gap = spacingMin(inside, r.inside);
     const d = dist(candidate, r.point);
@@ -812,14 +815,35 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     }
 
     // --- spacing read ---
+    // FIX 4: reset drive-relocation flag when driving ends
+    if (!driving && ob.relocatedForDrive) ob.relocatedForDrive = false;
+
+    // Meaningful triggers that override the dwell: lane-clear, just passed, or the
+    // FIRST tick of a drive. driving is edge-gated (relocatedForDrive) so a drive
+    // doesn't bypass the dwell every tick it lasts — only the one relocation.
+    // NOTE: the dwell is applied LOWER DOWN, gating only the spacing relocation —
+    // not the cuts/give-and-go/drive logic, which must stay free so dwelling the
+    // floor doesn't also kill the slashing.
+    const triggerFired = shouldClearLane(p, h) || justPassed || (driving && !ob.relocatedForDrive);
+
     let tgt: Point = { x: home.x, y: home.y };
     if (shouldClearLane(p, h)) {
       tgt = laneClearSpot(p, home, h, dir);
     } else if (driving) {
       // clear the strong side: if I'm on the drive side, relocate to the weak side
       // (this both opens the lane and sets up the kick-out)
+      // FIX 4: only relocate on the first tick driving applies to this player
       const onDriveSide = p.y < 25 === driveLow;
-      if (onDriveSide && dist(p, h) < 19) tgt = { x: home.x, y: 50 - home.y };
+      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive) {
+        tgt = { x: home.x, y: 50 - home.y };
+        ob.relocatedForDrive = true;
+      } else {
+        // hold current target while driving continues
+        if (p.target) {
+          reserved.push({ p, point: p.target, inside });
+          continue;
+        }
+      }
     } else {
       // give-and-go: the player who just passed cuts hard to the rim
       if (!laneCutReserved && justPassed && p === passer && chance(GIVE_AND_GO_CHANCE * cutFactor)) {
@@ -887,7 +911,23 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         continue;
       }
     }
-    p.target = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
+    // DWELL (spacing only): cuts/give-and-go/drive relocations above already had
+    // their chance this tick; here we hold the floor-spacing spot for the dwell
+    // window so off-ball players stop perpetually micro-adjusting around the ball.
+    if (!triggerFired && ob.t < SPACE_DWELL_MIN && p.target) {
+      reserved.push({ p, point: p.target, inside });
+      continue;
+    }
+    const candidate = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
+    // FIX 2: only assign new target if it represents a meaningful shift
+    if (!p.target || dist(candidate, p.target) >= RETARGET_MIN_SHIFT) {
+      p.target = candidate;
+      // Restart the dwell on each actual relocation so the player holds the new
+      // spot ~SPACE_DWELL_MIN before re-evaluating again (a recurring pause,
+      // not a one-shot). Without this, ob.t grows monotonically and the dwell
+      // lapses permanently after the first window -> constant re-targeting.
+      ob.t = 0;
+    }
     reserved.push({ p, point: p.target, inside });
   }
 }

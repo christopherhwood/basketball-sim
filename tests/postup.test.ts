@@ -108,7 +108,7 @@ function playGame(seed: number, home: Player[], away: Player[]): { home: Player[
 const sum = (team: Player[], key: keyof Player["stats"]): number =>
   team.reduce((acc, p) => acc + p.stats[key], 0);
 
-const SEEDS = Array.from({ length: 15 }, (_, i) => i + 1);
+const SEEDS = Array.from({ length: 50 }, (_, i) => i + 1);
 
 describe("physical post play and rebounding drive box-score behavior", () => {
   /*
