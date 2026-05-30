@@ -224,6 +224,12 @@ export interface GameState {
   feed: FeedEvent[];
   pnrSwitched?: boolean;
   driving?: boolean;
+  // cumulative seconds the handler has patiently held/probed this possession
+  // (no good look yet) — lets off-ball motion and a ball screen develop.
+  holdT?: number;
+  // on-ball drive-cutoff matchup resolved ONCE per drive: true = handler beat his
+  // man (drive lives on), false = contained. undefined until the first roll.
+  driveBeaten?: boolean;
   homeAttack?: HoopSide;
   awayAttack?: HoopSide;
   lastShooter?: Player;

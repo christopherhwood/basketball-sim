@@ -128,6 +128,7 @@ export function setupPossession(initial: boolean): void {
   G.ball.state = "held";
   G.pnrSwitched = false;
   G.driving = false;
+  G.holdT = 0;
   // clear stale targets from the previous possession so nobody drifts the wrong way
   players().forEach((p) => {
     p.target = { x: p.x, y: p.y };
