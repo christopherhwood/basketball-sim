@@ -299,8 +299,12 @@ const HIGH_POST_MIN_DEPTH = 9; // relative to hoop: FT-line/high-post band start
 const HIGH_POST_MAX_DEPTH = 17;
 const HIGH_POST_MIN_Y = 17;
 const HIGH_POST_MAX_Y = 33;
-const LANE_CLEAR_WARN_T = 1.7;
-const LANE_CLEAR_LOW_IQ_EXTRA_T = 0.9;
+// A lane-camping player must START clearing with enough lead time to physically
+// vacate the paint before the 3.0s violation — a slow big needs ~1s to cover the
+// ~10 ft out of the lane, so the warn fires well under the limit (was 1.7/0.9,
+// which left a slow/low-IQ big too little runway and produced 3-second calls).
+const LANE_CLEAR_WARN_T = 1.4;
+const LANE_CLEAR_LOW_IQ_EXTRA_T = 0.4;
 
 type ReservedTarget = { p: Player; point: Point; inside: boolean };
 
@@ -1212,7 +1216,10 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     const postThreat = tend.postUp >= POST_OFFBALL_PIVOT;
     let home = homeOf.get(p) || spots[ob.spot] || spots[1];
     // a high-postUp big posts up on the block so the pass logic can feed him
-    if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 18 : 32 };
+    // Post at the lane EDGE (just OUTSIDE the painted lane, y<17 / y>33) rather
+    // than inside it — a real low block straddles the line, and sitting inside is
+    // what accrues offensive three-seconds when a possession runs long.
+    if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 15 : 35 };
     const spacingOptions = inside ? insideSpots : perimeterSpots;
 
     // --- cut in progress ---
