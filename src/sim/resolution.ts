@@ -75,6 +75,9 @@ const REB_BOXOUT_DEF_BONUS = 2.20; // defensive box-out edge multiplier; was 1.2
 const REB_CRASH_MAX_BONUS = 0.3; // crashGlass weight boost for offensive players (1+bonus). NOTE: effect is modest under the soft positional draw (proximity dominates); strengthen via crashGlass-scaled convergence in the motion-offense overhaul.
 const REB_LUCK_FLOOR = 0.0;        // flat base added to proximity weight so far-away players get a chance
 
+// --- putback ---
+const PUTBACK_RANGE = 7; // ft from rim within which an offensive rebound goes right back up
+
 function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   let best: Player | null = null,
     bd = 1e9;
@@ -341,8 +344,16 @@ function missAndRebound(sh: Player): void {
     G.ball.holder = best;
     best.hasBall = true;
     G.shotClock = Math.max(G.shotClock, 14);
-    G.decideCD = 6;
     G.actionPhase = "screen";
+    // Putback: an offensive board secured at the rim goes RIGHT back up before
+    // the defense resets — decide almost immediately, biased to finish. A rebound
+    // grabbed away from the rim resets into a normal half-court possession.
+    if (dist(best, h) <= PUTBACK_RANGE) {
+      G.putbackBy = best;
+      G.decideCD = 1;
+    } else {
+      G.decideCD = 6;
+    }
   } else {
     beginLiveTransition(best);
   }
