@@ -8,7 +8,7 @@ import { attemptShot } from "./resolution.js";
 import { beginLiveTransition, beginScoreTransition } from "./transition.js";
 import { spotsFor } from "./possession.js";
 import { nearestDef, makeProb, contestOf } from "./shot.js";
-import { effectiveTendencies, tendencyFactor } from "./tendency.js";
+import { effectiveTendencies, tendenciesOf, tendencyFactor } from "./tendency.js";
 import { beginFouled } from "./resolution.js";
 import { recordDecision, recordTouch, recordTO } from "./debugTally.js";
 import { simTunables } from "./tunables.js";
@@ -198,7 +198,7 @@ const POST_FEED_SMOTHER_R = 5.5; // ft: a 2nd defender this close to the post ma
 const POST_FEED_TEND_PIVOT = 45; // postUp tendency threshold to be feed-eligible (matches POST_OFFBALL_PIVOT)
 
 // Three-point shot volume (moves 3PA without flattening per-player divergence).
-const THREE_UTILITY_MULT = 1.12; // slightly trimmed from 1.2
+const THREE_UTILITY_MULT = 1.12;
 // Controls how strongly the shootThree tendency swings three volume: 1 = full
 // (0.5..1.5) swing. Slightly above full keeps explicit three-point coaching
 // visible after route-risk tuning removes some easy pass-first outcomes.
@@ -207,9 +207,9 @@ const THREE_UTILITY_MULT = 1.12; // slightly trimmed from 1.2
 // with teeth. Pivot near the league-average shoot tendency (neutral there); the
 // spread widens so a reluctant shooter genuinely defers and a gunner fires more.
 const SHOOT_TEND_PIVOT = 55;
-const SHOOT_TEND_SLOPE = 0.018; // per tendency point (vs the generic ~0.0112)
-const SHOOT_TEND_LO = 0.4;
-const SHOOT_TEND_HI = 1.6;
+const SHOOT_TEND_SLOPE = 0.0145; // per tendency point — slightly steeper than generic ~0.0112
+const SHOOT_TEND_LO = 0.55;
+const SHOOT_TEND_HI = 1.55;
 function shootTendMult(tend: number): number {
   return clamp(1 + (tend - SHOOT_TEND_PIVOT) * SHOOT_TEND_SLOPE, SHOOT_TEND_LO, SHOOT_TEND_HI);
 }
@@ -1036,7 +1036,11 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
    A low-three OR high-postUp player operates near the rim; everyone else spaces
    the floor. Drives inside-vs-perimeter spot assignment in offBallMove. */
 export function isInsidePlayer(p: Player): boolean {
-  const t = effectiveTendencies(p);
+  // Use the player's INTRINSIC (base) tendencies for his floor-spacing role — a
+  // perimeter player coached to limited shot-freedom shouldn't morph into an
+  // inside player and abandon the arc; coaching changes WHAT he does, not his
+  // archetype/where he spaces.
+  const t = tendenciesOf(p);
   return t.shootThree < BIG_SHOOT_THREE_MAX || t.postUp >= BIG_POST_PIVOT;
 }
 
