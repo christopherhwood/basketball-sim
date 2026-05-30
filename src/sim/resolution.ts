@@ -78,6 +78,12 @@ const REB_LUCK_FLOOR = 0.0;        // flat base added to proximity weight so far
 // --- putback ---
 const PUTBACK_RANGE = 7; // ft from rim within which an offensive rebound goes right back up
 
+// --- assist ---
+// Seconds from catch to made basket within which the pass counts as an assist.
+// Catch-and-shoot / quick attacks qualify; a self-created bucket after holding or
+// dribbling does not. Tuned so the assisted-FG share lands near the NBA ~0.6.
+const ASSIST_WINDOW = 1.0;
+
 function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
   let best: Player | null = null,
     bd = 1e9;
@@ -94,7 +100,11 @@ function nearestDef(p: Point, def: Player[]): { d: Player | null; dd: number } {
 export function attemptShot(sh: Player, type: ShotType, contest: number, pts: number, mp: number, transition = false): void {
   const tuning = simTunables();
   G.lastShooter = sh;
-  G.lastAssist = G.pendingAssist;
+  // Credit an assist only if the basket comes promptly after the catch — a direct
+  // result of the pass. A catch-and-shoot or quick attack qualifies; holding,
+  // probing, or isolating before scoring is self-created (no assist).
+  const promptlyAfterCatch = G.pendingAssist != null && G.possClock - (G.assistCatchT ?? -99) <= ASSIST_WINDOW;
+  G.lastAssist = promptlyAfterCatch ? G.pendingAssist : null;
   G.pendingAssist = null;
   const def = defTeam();
   // block check on inside shots (a blocked shot still counts as a missed FGA)
