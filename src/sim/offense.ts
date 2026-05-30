@@ -796,7 +796,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         ob.state = "fill";
         ob.t = 0;
         // bigs refill inside; shooters fill the most open perimeter spot
-        ob.fill = inside ? home : mostOpenSpot(p, perimeterSpots, off, def);
+        ob.fill = inside ? home : mostOpenSpot(p, perimeterSpots, off, def, h);
       }
       continue;
     }
@@ -878,7 +878,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
         ob.t = 0;
         ob.fill = reserveAwareTarget(
           p,
-          mostOpenSpot(p, spacingOptions, off, def),
+          mostOpenSpot(p, spacingOptions, off, def, h),
           spacingOptions,
           reserved,
           def,
@@ -932,17 +932,26 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
   }
 }
 
-function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Player[]): Point {
-  let best = spots[3],
+function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Player[], h: Point): Point {
+  let best = spots[spots.length - 1],
     bs = -1e9;
   for (const s of spots) {
-    let nd = 1e9;
-    for (const d of def) nd = Math.min(nd, dist(d, s));
+    let minDefDist = 1e9;
+    for (const d of def) minDefDist = Math.min(minDefDist, dist(d, s));
+    const openness = clamp(minDefDist / 20, 0, 1);
+
+    const distToHoop = dist(s, h);
+    let shotValue: number;
+    if (distToHoop > 22 && (s.y < 8 || s.y > 42)) shotValue = 0.95;
+    else if (distToHoop > 22) shotValue = 0.85;
+    else if (distToHoop < 8) shotValue = 0.75;
+    else shotValue = 0.4;
+
     let occ = false;
     for (const o of off) {
       if (o !== p && dist(o, s) < 4) occ = true;
     }
-    const score = nd - (occ ? 20 : 0);
+    const score = 0.6 * openness + 0.4 * shotValue - (occ ? 0.4 : 0);
     if (score > bs) {
       bs = score;
       best = s;

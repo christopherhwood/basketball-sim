@@ -152,13 +152,25 @@ export function defenseMove(): void {
       }
     }
     if (helper) {
-      // Scale help eagerness by the helper's helpDefense tendency (50 -> 1.0 neutral):
-      // high helpDefense -> larger help radius and steps further toward the driver;
-      // low helpDefense -> stays closer to his man.
       const hf = tendencyFactor(effectiveTendencies(helper).helpDefense);
       const helpRadius = 14 * hf;
-      const helpLerp = clamp(0.45 * hf, 0, 1);
-      if (hd < helpRadius) helper.target = { x: lerp(ball.x, h.x, helpLerp), y: lerp(ball.y, h.y, helpLerp) };
+      if (hd < helpRadius) {
+        const bspeed = Math.hypot(ball.vx, ball.vy);
+        const distToHoop = dist(ball, h) || 1;
+        const hvx = (h.x - ball.x) / distToHoop;
+        const hvy = (h.y - ball.y) / distToHoop;
+        const rawUx = bspeed > 2 ? ball.vx / bspeed : hvx;
+        const rawUy = bspeed > 2 ? ball.vy / bspeed : hvy;
+        // if velocity points away from hoop (misdirection), fall back to hoop direction
+        const dot = rawUx * hvx + rawUy * hvy;
+        const ux = dot >= 0 ? rawUx : hvx;
+        const uy = dot >= 0 ? rawUy : hvy;
+        const commitFrac = clamp(0.28 + hf * 0.22, 0.28, 0.50);
+        const stepDist = Math.max(0, distToHoop - 4) * commitFrac;
+        const wallX = ball.x + ux * stepDist;
+        const wallY = ball.y + uy * stepDist;
+        helper.target = { x: wallX, y: clamp(wallY, 4, 46) };
+      }
     }
   }
 
