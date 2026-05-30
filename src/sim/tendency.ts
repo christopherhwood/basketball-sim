@@ -47,6 +47,10 @@ export function effectiveTendencies(p: Player): Tendencies {
   t.shootThree += freedomDelta;
   t.shootMid += freedomDelta;
   t.driveRim += freedomDelta;
+  // shot freedom also shifts how readily he gives it up: a "limited" player defers
+  // (passes more) rather than just standing there not shooting; "free" hunts his
+  // own more. This is what turns reduced shooting into actually moving the ball.
+  t.pass -= freedomDelta * 2.4;
 
   if (c.shotBias === "three") {
     t.shootThree += 20;
