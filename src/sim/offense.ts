@@ -774,6 +774,7 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
     reserved.push({ p, point: p.target, inside: p.role === "screener" || isInsidePlayer(p) });
   }
   let laneCutReserved = movers.some((p) => p.ob?.state === "cut");
+  let driveRelocationUsed = false;
   for (const p of movers) {
     const ob = p.ob;
     if (!ob) continue;
@@ -834,9 +835,10 @@ function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: T
       // (this both opens the lane and sets up the kick-out)
       // FIX 4: only relocate on the first tick driving applies to this player
       const onDriveSide = p.y < 25 === driveLow;
-      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive) {
+      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive && !driveRelocationUsed) {
         tgt = { x: home.x, y: 50 - home.y };
         ob.relocatedForDrive = true;
+        driveRelocationUsed = true;
       } else {
         // hold current target while driving continues
         if (p.target) {
