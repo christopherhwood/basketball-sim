@@ -3,7 +3,7 @@ import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll, moveTeam } from "./movement.js";
-import { decideOnBall, resolveOffense, isInsidePlayer } from "./offense.js";
+import { decideOnBall, decideOffBall, resolveOffense, isInsidePlayer } from "./offense.js";
 import { decideDefense } from "./defense.js";
 import { sense } from "./snapshot.js";
 import { resolveDefense } from "./resolve.js";
@@ -262,7 +262,8 @@ export function tick(): void {
   const defIntents = decideDefense(snap);
   if (G.ball.state === "held") {
     const ball = decideOnBall(snap);
-    resolveOffense(snap, ball);
+    const offBallIntents = decideOffBall(snap);
+    resolveOffense(snap, ball, offBallIntents);
   }
 
   // a foul / shot / pass during offense RESOLVE may have just ended the live

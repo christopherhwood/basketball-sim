@@ -24,6 +24,7 @@ export interface PlayerView {
   role: string;
   assignNum: number | null; // assignment frozen at tick start
   obState: string | null; // off-ball state, frozen
+  target: Point | null; // the player's prior target, frozen (spacing reads it purely)
 }
 
 export interface Snapshot {
@@ -55,6 +56,7 @@ function viewOf(p: Player): PlayerView {
     role: p.role,
     assignNum: p.assign ? p.assign.num : null,
     obState: p.ob ? p.ob.state : null,
+    target: p.target,
   };
 }
 
