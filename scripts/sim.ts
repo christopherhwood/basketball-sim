@@ -3,8 +3,13 @@
  *
  *   npm run sim
  *   npm run sim -- --games 500 --json
- *   npm run sim -- --home harbor-city-wolves --away summit-valley-rampart --neutral-tactics --swap
+ *   npm run sim -- --home harbor-city-wolves --away summit-valley-rampart --swap
+ *   npm run sim -- --asymmetric-tactics   # your-coached-team vs default-CPU matchup
  *   npm run sim -- --tunables /tmp/candidate.json
+ *
+ * Tactics default to NEUTRAL (both sides identical) so the harness measures
+ * ENGINE balance, not the coached-vs-CPU tactic gap. Pass --asymmetric-tactics
+ * to restore the playable matchup (home = your gameplan, away = CPU defaults).
  */
 
 import { readFileSync } from "node:fs";
@@ -44,7 +49,7 @@ const result = runSimBatch({
   seed: num(args, "--seed", 1),
   homeId: str(args, "--home"),
   awayId: str(args, "--away"),
-  neutralTactics: has(args, "--neutral-tactics"),
+  neutralTactics: !has(args, "--asymmetric-tactics"),
   swap: has(args, "--swap"),
 });
 

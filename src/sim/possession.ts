@@ -3,7 +3,7 @@ import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll, moveTeam } from "./movement.js";
-import { offenseDecide, isInsidePlayer } from "./offense.js";
+import { decideOnBall, decideOffBall, resolveOffense, isInsidePlayer } from "./offense.js";
 import { decideDefense } from "./defense.js";
 import { sense } from "./snapshot.js";
 import { resolveDefense } from "./resolve.js";
@@ -249,10 +249,26 @@ export function tick(): void {
       resolveShot();
       return;
     }
-  } else if (G.ball.state === "held") {
-    offenseDecide();
   }
-  // a foul during offenseDecide() may have just started a FT sequence this tick
+
+  // Live half-court possession runs the full decide pipeline from ONE snapshot:
+  // SENSE once, DECIDE both offense and defense against the SAME frozen world
+  // (order-independent perception — neither side reads the other's would-be move
+  // this tick), RESOLVE offense (rng + execution it deferred) then defense, then
+  // ACT as a single movement pass over both teams. See decide-pipeline-design.md.
+  // During pass/shot flight the offense doesn't decide, but defense still tracks,
+  // so SENSE + defense decide always happen here.
+  const snap = sense();
+  const defIntents = decideDefense(snap);
+  if (G.ball.state === "held") {
+    const ball = decideOnBall(snap);
+    const offBallIntents = decideOffBall(snap);
+    resolveOffense(snap, ball, offBallIntents);
+  }
+
+  // a foul / shot / pass during offense RESOLVE may have just ended the live
+  // decision (FT sequence, transition, shot/pass in flight) — handle with the
+  // same post-decision checks the live possession has always run.
   if (G.ball.state === "freethrow") {
     updateFreeThrows();
     moveAll();
@@ -267,14 +283,12 @@ export function tick(): void {
     return; // dead ball: other team inbounds from the baseline
   }
 
-  // Offense integrates first so defense reads up-to-date offensive positions
-  // this tick (eliminates the built-in 0.1 s lag). Defense now runs through the
-  // decide pipeline: SENSE the (post-offense-move) world, DECIDE per-defender
-  // intents, RESOLVE applies targets + the deferred help-recognition rng / PnR
-  // switch / hedge. See docs/decide-pipeline-design.md.
+  // RESOLVE defense from the SAME pre-move snapshot (its help-recognition rng /
+  // PnR switch / hedge), then ACT: one movement pass over both teams. The old
+  // "offense integrates first" ordering hack is gone — targets were all computed
+  // from one snapshot, so a uniform pass is order-independent.
+  resolveDefense(defIntents, snap);
   moveTeam(offTeam());
-  const defSnap = sense();
-  resolveDefense(decideDefense(defSnap), defSnap);
   moveTeam(defTeam());
   // ball follows holder after everyone has moved
   if (G.ball.state === "held" && G.ball.holder) {

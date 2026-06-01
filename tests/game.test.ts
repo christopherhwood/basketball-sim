@@ -186,7 +186,7 @@ const DT_GRACE = 0.1 + 1e-9;
 // GOLDEN values — discovered from a verified deterministic run (seed 7, 3000 ticks).
 // A port reproducing the mulberry32 stream and tick logic MUST match these exactly.
 const GOLDEN = {
-  homeScore: 5,
-  awayScore: 10,
-  totalFga: 19,
+  homeScore: 23,
+  awayScore: 14,
+  totalFga: 21,
 };

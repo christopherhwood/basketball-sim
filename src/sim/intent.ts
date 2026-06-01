@@ -1,5 +1,37 @@
 import type { Player, Point, ShotType } from "../types.js";
 
+/* ---------- BallDecision ----------
+   The on-ball decider's PURE output. Unlike the off-ball intents, the ball
+   handler's choice cannot be reduced to a single pre-noise pick in DECIDE: the
+   legacy code adds randn()*noise to each utility BEFORE selecting (so both the
+   winner AND hold-eligibility are post-noise), and that rng must live in RESOLVE.
+   So DECIDE returns the four SCORED (pre-noise) utilities plus everything RESOLVE
+   needs to add noise, pick the winner, run the drive-cutoff rolls, and execute.
+   See docs/decide-pipeline-design.md and the RESOLVE SPEC. */
+export interface BallDecision {
+  who: Player;
+  // pre-noise utilities
+  shootU: number;
+  driveU: number;
+  passU: number;
+  postU: number;
+  // shot/contest context (for an executed shoot)
+  type: ShotType;
+  contest: number;
+  mp: number;
+  pts: number;
+  open: number;
+  dh: number; // distance handler -> hoop
+  // pass context
+  bestPass: Player | null;
+  bestPU: number;
+  // post context
+  postDef: Player | null;
+  postEdge: number;
+  // drive target point (lerp toward the hoop)
+  toward: Point;
+}
+
 /* ---------- INTENTS ----------
    A decision is a VALUE, not a side effect. Each player's decider returns one
    Intent per tick; RESOLVE executes it (and is the only phase allowed to mutate
@@ -38,6 +70,47 @@ export type IntentKind = Intent["kind"];
 export interface DecidedIntent {
   who: Player;
   intent: Intent;
+}
+
+/* ---------- OFF-BALL CANDIDATE + DECIDED INTENT ----------
+   Off-ball offense is a per-tick UTILITY decider, mirroring the ball-handler's
+   decide(score)→resolve(noise+select+execute) split — NOT an rng-gated state
+   machine. For each FREE (not mid-commitment) non-handler mover, DECIDE SCORES a
+   set of candidate actions (holdSpace / cut / screen / lift) off the snapshot,
+   each modulated by effectiveTendencies, and returns them. RESOLVE adds decision
+   NOISE to the utilities, picks the best, and COMMITS it (sets ob.state, resets
+   ob.t, applies the target). A mover MID-COMMITMENT (in cut/screen/fill and not
+   expired) is NOT re-scored — it continues its action (hysteresis: prevents
+   per-tick jitter). All rng (the noise) lives in RESOLVE, consumed in fixed
+   per-mover order, so the seeded stream stays a port spec. See
+   docs/decide-pipeline-design.md and resolveOffBall. */
+
+export type OffBallActionKind = "holdSpace" | "cut" | "screen" | "lift";
+
+export interface OffBallCandidate {
+  kind: OffBallActionKind;
+  util: number; // pre-noise utility (effectiveTendencies-modulated)
+  to: Point; // target point this action steers toward
+  cutY?: number; // rim-cut lane y (cut only)
+  screenTo?: Point; // screen-set point (screen only)
+}
+
+export interface OffBallDecision {
+  who: Player;
+  // applied target for the current state (committed continuation OR holdSpace base)
+  to: Point;
+  // scored candidates a FREE mover chooses among (empty when mid-commitment).
+  candidates: OffBallCandidate[];
+  committed: boolean; // mover is mid-commitment this tick → continue, do NOT re-score
+  // deterministic state-machine markers (which commitment branch decide took) so
+  // RESOLVE advances the ob.t / relocatedForDrive lifecycle without re-deriving.
+  cutState: boolean; // mover is already in "cut" this tick
+  fillState: boolean; // mover is already in "fill"
+  screenState: boolean; // mover is already in "screen"
+  tookDriveRelocate: boolean; // space mover relocated weak-side for a drive this tick
+  heldDriving: boolean; // space mover held its prior target during a drive (no relocate)
+  heldDwell: boolean; // space mover held its prior target inside the dwell window
+  retarget: boolean; // bottom-block spacing shift fired (>= RETARGET_MIN_SHIFT) → reset ob.t
 }
 
 /* ---------- constructors ----------

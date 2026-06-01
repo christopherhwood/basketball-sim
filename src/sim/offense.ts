@@ -12,6 +12,8 @@ import { effectiveTendencies, tendenciesOf, tendencyFactor } from "./tendency.js
 import { beginFouled } from "./resolution.js";
 import { recordDecision, recordTouch, recordTO } from "./debugTally.js";
 import { simTunables } from "./tunables.js";
+import type { Snapshot, PlayerView } from "./snapshot.js";
+import type { BallDecision, OffBallDecision, OffBallCandidate } from "./intent.js";
 import type { Player, Point, Tactics } from "../types.js";
 
 /* Default ball-handling rating: the stronger hand. Force-direction (a later PR)
@@ -254,15 +256,9 @@ const INSIDE_X = 5; // ft from the hoop along the baseline axis for block spots
 const INSIDE_SHORT_X = 8.5; // short-corner depth
 const DUNKER_X = 4; // dunker-spot depth (rolled-screener reset / lone big)
 
-// Ball-reactive cutting. Frequencies are per decision tick (offenseDecide cadence)
-// and stay small so motion reads as activity, not chaos.
-const CUT_BASE_CHANCE = 0.006; // baseline basket-cut chance, scaled by driveRim factor
-const CUT_PASS_BONUS = 0.006; // extra basket-cut chance the tick a pass is caught
-const CUT_EARLY_CLOCK_BONUS = 0.003; // extra cut chance early in the shot clock (fades by mid-clock)
+// Ball-reactive cutting window. The early-clock bonus to off-ball motion fades by
+// mid-clock; the off-ball UTILITY weights (below) consume this via `earlyClock`.
 const CUT_EARLY_CLOCK_T = 12; // shot-clock seconds above which the early-clock bonus applies fully
-const GIVE_AND_GO_CHANCE = 0.04; // chance the passer cuts to the rim right after passing (give-and-go)
-const POST_REACT_CHANCE = 0.03; // chance a weak-side player lifts/fills to an open spot on a pass
-const BACKDOOR_CHANCE = 0.035; // backdoor-cut chance vs tight ball-side denial, scaled by driveRim
 
 // Ball-holder patience: when the handler's best look is a mediocre pass (nobody
 // is open) and there's time on the clock, he holds/probes instead of forcing it,
@@ -294,11 +290,39 @@ const CUTOFF_TO_HANDLE_SLOPE = 1 / 260; // a good handle reduces the cutoff turn
 const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/charges are rare; bad-pass TOs live elsewhere)
 const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
 const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
-const CUT_CHANCE_CAP = 0.022; // ceiling on the combined per-tick basket-cut chance
-const SCREEN_CHANCE = 0.004; // per tick: chance an eligible off-ball player enters screen state
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
 const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
 const SCREEN_TRIGGER_DIST = 4; // ft: screener must be within this of the defender to count as set
+
+/* ---------- OFF-BALL UTILITY DECIDER ----------
+   The off-ball mover is a per-tick utility decider. holdSpace is the baseline
+   action (relocate to the best spacing spot); cut / screen / lift compete with it,
+   their utilities built from the same conditions the legacy chance() gates read
+   and modulated by effectiveTendencies. RESOLVE adds randn()*OFFBALL_NOISE to each
+   utility and commits the winner. The weights are calibrated so the EMERGENT
+   per-decision win-rate of each action lands near the legacy per-decision chance
+   (cuts/screens/lifts happen at a realistic rate; holdSpace dominates otherwise).
+   A committed cut/screen/fill is NOT re-scored — its lifetime is the same
+   deterministic duration/abort the legacy state machine used. */
+const OFFBALL_NOISE = 0.9; // stddev of the decision noise added per candidate in RESOLVE
+const HOLD_SPACE_BASE = 1.0; // baseline holdSpace utility (the action to beat)
+// cut: baseline + ball-reactive bonuses, ×driveRim tendency factor. The high pivot
+// keeps cuts to a realistic rate against holdSpace+noise.
+const CUT_UTIL_BASE = -2.2; // baseline basket-cut attraction (well below holdSpace)
+const CUT_UTIL_PASS_BONUS = 0.9; // extra when a pass was just caught (motion off the catch)
+const CUT_UTIL_EARLY_BONUS = 0.4; // extra early in the shot clock
+const CUT_UTIL_OVERPLAY_BONUS = 1.1; // extra vs a tight ball-side denial (backdoor read)
+const CUT_UTIL_LANE_BONUS = 0.7; // extra when the rim lane / passing lane is open
+const CUT_UTIL_FINISH_W = 0.012; // per point of finishing above 50 (good finishers cut more)
+const GIVEGO_UTIL_BONUS = 1.0; // extra cut attraction for the passer right after passing (give-and-go)
+// screen: built from on-ball pressure on the handler + handler threat, ×screen tendency.
+const SCREEN_UTIL_BASE = -2.6; // baseline screen attraction (below holdSpace)
+const SCREEN_UTIL_PRESSURE_BONUS = 1.0; // extra when the handler is pressured (defender tight)
+const SCREEN_UTIL_THREAT_W = 0.9; // per unit of handler threat (a dangerous handler is worth screening for)
+// lift: weak-side relocation the moment the ball changes side. Mostly a spacing
+// refresh, so it sits just under holdSpace and wins occasionally via noise.
+const LIFT_UTIL_BASE = -1.4; // baseline lift attraction (just under holdSpace)
+const LIFT_UTIL_BALLMOVE_BONUS = 1.0; // extra the tick a pass was just caught (ball changed side)
 
 const SPACE_DWELL_MIN = 1.5; // seconds a player holds its spot after each relocation before re-evaluating
 const RETARGET_MIN_SHIFT = 2.5; // ft: ignore retarget if new target is closer than this to current
@@ -318,424 +342,187 @@ const LANE_CLEAR_LOW_IQ_EXTRA_T = 0.4;
 
 type ReservedTarget = { p: Player; point: Point; inside: boolean };
 
-/* ---------- 4) OFFENSE AI ---------- */
-export function offenseDecide(): void {
+/* ---------- 4) OFFENSE RESOLVE ----------
+   Resolves the off-ball movement intents (resolveOffBall: ob state machine + all
+   off-ball rng + the pnr PHASE logic) every tick, then on the decideCD cadence
+   runs the BALL block: the on-ball strip roll, the decision noise, the drive-
+   cutoff rolls, the selection precedence, and execution — all the rng and mutation
+   the pure decideOnBall deferred. This is the only offensive phase that mutates
+   game-logic state or consumes rng. See docs/decide-pipeline-design.md and the
+   RESOLVE SPEC.
+
+   Off-ball movement runs in resolveOffBall (a resolve-phase unit — see its header
+   for why off-ball is not a pure decide→resolve split). The ball-handler IS a
+   clean split: `ball` is decideOnBall(s)'s scored output (null when no holder),
+   and this function applies the noise + selection + execution. */
+export function resolveOffense(
+  s: Snapshot,
+  ball: BallDecision | null,
+  offBallIntents: OffBallDecision[],
+): void {
   const off = offTeam(),
     def = defTeam(),
     h = hoop(),
     tac = tacFor(G.offense);
   const tuning = simTunables();
-  // ----- run primary action so possessions have shape -----
-  runAction(off, def, h, tac);
+  // ----- off-ball: apply decided targets + state machine + rng + pnr phase logic -----
+  resolveOffBall(s, offBallIntents);
 
-  // ----- ball-handler decision (every decideCD ticks) -----
+  // ----- ball-handler resolution (every decideCD ticks) -----
   if (G.decideCD > 0) {
     G.decideCD--;
-  } else {
-    G.decideCD = 4; // decide ~ every 0.4s
-    const bh = G.ball.holder;
-    if (!bh) return;
-    recordTouch(bh.name);
-
-    // ----- on-ball turnover / strip check (before any shoot/drive/pass) -----
-    // The on-ball defender can force a live-ball turnover this window. Scales with
-    // defensive pressure, the defender's steal+gambleSteal vs the handler's
-    // handle+iq, and whether the handler is driving into the defense.
-    {
-      const onBallDef = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
-      if (onBallDef) {
-        const stealEdge = (onBallDef.attr.steal - handleOf(bh)) * STRIP_STEAL_SLOPE;
-        const iqEdge = (onBallDef.attr.iq - bh.attr.iq) * STRIP_IQ_SLOPE;
-        let tovP =
-          (ON_BALL_TOV_BASE + Math.max(0, stealEdge) + Math.max(0, iqEdge)) *
-          tuning.turnovers.onBallScale *
-          STRIP_PRESSURE_MULT[tac.pressure] *
-          tendencyFactor(effectiveTendencies(onBallDef).gambleSteal);
-        if (G.driving) tovP *= STRIP_DRIVE_MULT;
-        tovP = clamp(tovP, 0, ON_BALL_TOV_CAP);
-        if (chance(tovP)) {
-          bh.stats.tov++;
-          recordTO("strip", bh, dist(bh, h));
-          if (chance(STRIP_CLEAN_SHARE)) {
-            // clean steal: the on-ball defender takes it and pushes the other way
-            onBallDef.stats.stl++;
-            logEv(`${onBallDef.name} strips ${bh.name} — steal!`, "to");
-            G.driving = false;
-            beginLiveTransition(onBallDef, true);
-          } else {
-            // lost ball / bad handle: nearest defender recovers (no STL credited)
-            const recover = nearestDef(bh, def).d || onBallDef;
-            logEv(`${bh.name} loses the handle — turnover`, "to");
-            G.driving = false;
-            beginLiveTransition(recover);
-          }
-          return;
-        }
-      }
-    }
-
-    const dh = dist(bh, h),
-      type = shotTypeFor(dh);
-    const contest = contestOf(bh, def);
-    const open = clamp(1 - contest, 0, 1);
-    const pts = type === "three" ? 3 : 2;
-    const mp = makeProb(bh, type, contest);
-    const ev = mp * pts;
-
-    // shot-selection multiplier from your tactics
-    const selM = (() => {
-      const s = tac.shotSel;
-      if (type === "three") return s === "three" ? 1.4 : s === "rim" ? 0.55 : 1;
-      if (type === "rim" || type === "close") return s === "rim" ? 1.4 : s === "three" ? 0.7 : 1;
-      return s === "three" ? 0.7 : 1;
-    })();
-    // urgency as shot clock winds down
-    const urg = G.shotClock < 10 ? (10 - G.shotClock) / 10 : 0;
-
-    // zone-specific shooting tendency (driveRim doubles as rim-shooting propensity).
-    // postUp drives the post-up branch below: a post threat near the basket with a
-    // physical edge over his on-ball defender backs him down for a close look or foul.
-    const tendencies = effectiveTendencies(bh);
-    const shootTend =
-      type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
-    let shootU = ev * selM * (0.35 + 0.65 * open) + urg * 2.4;
-    if (type === "three") {
-      // Shoot volume tracks the shoot tendency on a STEEPER curve than the generic
-      // tendencyFactor — so the data value and coaching (which shift the effective
-      // tendency) drive the shot mix with real teeth, rather than a good rating
-      // alone dictating volume. Pivot near the league-average shootThree so the
-      // average shooter is ~neutral while the spread (reluctant vs gunner) widens.
-      shootU *= shootTendMult(shootTend) * THREE_UTILITY_MULT * tuning.decisions.threeUtilityScale;
-      // open-look floor: nudges MILDLY-reluctant but capable shooters to take the
-      // open three. The reluctance weight is a band peaking around shootThree ~50
-      // and fading to zero both at neutral-plus (high-volume teams already shoot
-      // plenty) AND at the very-low extreme (a team that truly never shoots threes
-      // must stay low, so per-player divergence is preserved at the extremes).
-      const reluctance = clamp((shootTend - 26) / 18, 0, 1) * clamp((64 - shootTend) / 13, 0, 1);
-      // capability band peaks for solid-but-not-elite shooters (three ~55-68) and
-      // fades for both non-shooters (would tank 3P%) and elite high-volume shooters
-      // (already shooting plenty — keeps pace-and-space teams under the ceiling).
-      const t3 = bh.attr.three;
-      const capable = clamp((t3 - 42) / 16, 0, 1) * clamp((78 - t3) / 16, 0, 1);
-      shootU += THREE_UTILITY_FLOOR * tuning.decisions.threeUtilityScale * open * reluctance * capable;
-    } else {
-      // mid/drive volume keeps the generic (gentler) tendency scaling — steepening
-      // here would suppress 2-point looks (lower avg tendencies) and push the 3-rate up.
-      shootU *= tendencyFactor(shootTend);
-    }
-
-    // Early-clock patience: with the shot clock full, contested looks get passed
-    // up; the bar drops smoothly as the clock winds down (and `urg` above adds
-    // late-clock urgency). Team PACE sets how patient to be — a fast team fires
-    // earlier, a slow team works for a better shot. Per-player shot freedom is
-    // NOT re-applied here: it already flows through the shoot tendency above.
-    // The suppression scales with (1 - open), so wide-open looks are taken in
-    // rhythm regardless of clock; only contested early jacks are deferred.
-    const clockFrac = clamp(G.shotClock / 24, 0, 1);
-    const paceAdj = tac.pace === "fast" ? -PACE_PATIENCE : tac.pace === "slow" ? PACE_PATIENCE : 0;
-    const patience = clamp(BASE_PATIENCE + paceAdj, 0, 1) * clockFrac;
-    shootU *= 1 - patience * (PATIENCE_OPEN_FLOOR + (1 - PATIENCE_OPEN_FLOOR) * (1 - open));
-
-    // Wide-open with the ball: a man with no defender near him should look to
-    // shoot (if in range) or attack the closeout — never just reset the offense.
-    // Covers kick-outs to a helped-off man (catchShoot) and any other time the
-    // handler catches/finds himself uncontested.
-    const wideOpen = bh.catchShoot || contest < OPEN_CATCH_CONTEST;
-    if (wideOpen && open > 0.45) {
-      shootU += CATCH_SHOOT_SHOOT_BONUS * open;
-    }
-
-    // drive utility: open lane + handle/speed edge vs man, defender lag, low-iq defender
-    const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
-    const laneBlock = rimHelp(bh, def, h);
-    let driveU = -1;
-    if (dh > DRIVE_BASE_DIST_MIN) {
-      const defPerimD = onBall ? onBall.attr.perimD : 50;
-      const defSpeed = onBall ? onBall.attr.speed : 50;
-      const defIq = onBall ? onBall.attr.iq : 70;
-      const handleEdge = (handleOf(bh) - defPerimD) * DRIVE_HANDLE_SLOPE;
-      const speedEdge = (bh.attr.speed - defSpeed) * DRIVE_SPEED_SLOPE;
-      const iqBonus = Math.max(0, DRIVE_IQ_PIVOT - defIq) * DRIVE_IQ_SLOPE;
-
-      // defender lag: if the on-ball defender's target is far from the handler,
-      // he is closing out or caught off-guard — advantageous for the driver
-      let lagBonus = 0;
-      if (onBall && onBall.target) {
-        const defLag = dist(onBall.target, bh);
-        if (defLag > DRIVE_LAG_DIST_THRESHOLD) lagBonus = DRIVE_LAG_BONUS;
-      }
-
-      // tight defender with a handle advantage: the defender presses up but the
-      // handler has enough skill to blow by him
-      let tightBonus = 0;
-      if (tac.pressure === "tight" && handleOf(bh) >= DRIVE_TIGHT_HANDLE_FLOOR) {
-        tightBonus = DRIVE_TIGHT_BONUS;
-      }
-
-      // off-screen bonus: any teammate physically near the on-ball defender
-      const offScreenBonus = (() => {
-        if (!onBall) return 0;
-        for (const o of off) {
-          if (o === bh) continue;
-          if (dist(o, onBall) < 4) return DRIVE_SCREEN_BONUS;
-        }
-        return 0;
-      })();
-
-      const continuationBonus = G.driving ? DRIVE_CONTINUATION_BONUS : 0;
-      driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + offScreenBonus + continuationBonus)
-        * (1 - laneBlock * 0.7);
-    }
-
-    // open-lane bonus: no defender in the corridor between the handler and the hoop
-    if (dh > OPEN_LANE_MIN_DIST) {
-      const laneOpen = isLaneClear(bh, def, h);
-      if (laneOpen) driveU += OPEN_LANE_BONUS;
-    }
-
-    if (tac.shotSel === "rim") driveU += 0.25;
-    if (tac.shotSel === "three") driveU -= 0.2;
-    driveU *= tendencyFactor(tendencies.driveRim) * tuning.decisions.driveUtilityScale;
-
-    // Late-clock drive aggression: unlike shooting (pickier EARLY), driving gets
-    // BOLDER as the clock winds down — with time running out a handler attacks
-    // the rim to force a shot or a foul rather than settle. Shares the `urg`
-    // ramp (kicks in under 10s). Only when a real drive lane exists (dh check).
-    if (dh > DRIVE_BASE_DIST_MIN) driveU += urg * DRIVE_URGENCY;
-
-    // A non-creator big who ends up with the ball out away from the basket
-    // shouldn't iso-drive off the bounce (that's where low-handle bigs get
-    // stripped) — he hands it off / kicks it back to a guard instead. He can
-    // still post (postU) or finish a deep catch; only the perimeter iso is killed.
-    // only a big STRANDED out on the perimeter gives it back — a big rolling/
-    // flashing inside POST..GIVEUP_DEPTH still finishes or posts.
-    const giveUpBig = isInsidePlayer(bh) && handleOf(bh) < BIG_GIVEUP_HANDLE && dh > BIG_GIVEUP_DEPTH;
-    if (giveUpBig) driveU *= BIG_DRIVE_SUPPRESS;
-
-    // Has the handler beaten his on-ball defender (no longer goal-side, or lost
-    // contact)? A beaten driver attacks the rim to finish or draw a foul.
-    const onBallBeaten = onBall
-      ? dist(onBall, h) > dh - LAYUP_BEATEN_BEHIND || dist(onBall, bh) > LAYUP_BEATEN_GAP
-      : true;
-    // A beaten driver with no two-man wall ahead keeps attacking the rim instead
-    // of kicking — that's how a slasher finishes and gets to the line. Only kick
-    // when he's genuinely walled off (a real help commitment).
-    const cleanToRim = G.driving && onBallBeaten && laneWallCount(bh, def, h) < 2;
-
-    // pass utility: find best teammate (more open / better look)
-    // Also checks for drive-and-kick targets (open man after help commits)
-    // and post-feed targets (posting big with a position edge).
-    const driveKickActive = G.driving && dh < DRIVE_KICK_MIN_HANDLER_DIST
-      && !cleanToRim
-      && helpCommittedToDriver(bh, def, h);
-    const kickPassBonus = driveKickActive
-      ? DRIVE_KICK_OPEN_BONUS * clamp((bh.attr.pass - 50) * DRIVE_KICK_PASS_SLOPE + 1, 0.7, 1.5)
-      : 0;
-
-    let bestPass: Player | null = null,
-      bestPU = -1;
-    for (const t of off) {
-      if (t === bh) continue;
-      const tc = contestOf(t, def),
-        to = 1 - tc;
-      const td = dist(t, h),
-        tt = shotTypeFor(td);
-      const tev = makeProb(t, tt, tc) * (tt === "three" ? 3 : 2);
-      const advance = td < dh - 2 ? 0.3 : 0; // reward feeding closer looks
-
-      // drive-and-kick: if help has committed, the player whose defender helped is open
-      let kickBonus = 0;
-      if (driveKickActive) {
-        const tDef = def.find((d) => d.assign === t);
-        if (tDef && isHelping(tDef, bh, h)) kickBonus = kickPassBonus;
-      }
-      // explicit catch-and-shoot target: helper left this man to wall up the drive
-      if (t.catchShoot) kickBonus = Math.max(kickBonus, CATCH_SHOOT_PASS_BONUS);
-
-      // post-feed: a teammate posting near the basket with a physical edge earns a bonus
-      const postFeedBonus = postFeedValue(t, def, h);
-
-      // hand-off / give-back: a non-creator big gives it to a capable handler (a
-      // guard cutting off him) to restart the offense rather than holding it.
-      const handoffBonus = giveUpBig && handleOf(t) >= BIG_GIVEUP_HANDLE ? HANDOFF_PASS_BONUS : 0;
-
-      const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus
-        - passSelectionPenalty(bh, t, h);
-      if (pu > bestPU) {
-        bestPU = pu;
-        bestPass = t;
-      }
-    }
-    // ball-movement bias early in clock so it isn't iso every time
-    const passBias = G.possClock < 6 ? 0.5 : 0.1;
-    let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass) * tuning.decisions.passUtilityScale;
-
-    // post-up utility: a post threat near the basket can back down a weaker
-    // on-ball defender. The physical EDGE pits the handler's strength/mass/length
-    // against the defender's strength/mass and interior defense; utility scales
-    // with that edge AND the postUp tendency (coaching/PR3 already folded in).
-    const postDef = onBall;
-    let postEdge = 0;
-    let postU = -1;
-    if (postDef && dh <= POST_RANGE && tendencies.postUp >= POST_MIN_TEND) {
-      postEdge = postOffenseRating(bh) - postDefenseRating(postDef);
-      if (postEdge > POST_MIN_EDGE) {
-        postU =
-          (POST_BASE_UTIL + clamp(postEdge, 0, POST_EDGE_CAP) * POST_EDGE_UTIL_MULT) *
-          tendencyFactor(tendencies.postUp) *
-          POST_TEND_MULT;
-      }
-    }
-
-    // Beaten-to-the-rim finish: a beaten driver (computed above) attacks the
-    // basket — keep driving until in finishing range, then go up with the layup
-    // rather than pulling up or kicking it back out. The payoff for beating your
-    // man when nobody walls the lane.
-    if (onBallBeaten && dh < LAYUP_ATTACK_DIST && laneWallCount(bh, def, h) < 2) {
-      const help = rimHelp(bh, def, h);
-      if (dh > DRIVE_BASE_DIST_MIN) {
-        driveU += LAYUP_DRIVE_BONUS * clamp(1 - help * 0.5, 0.4, 1);
-      } else {
-        shootU += LAYUP_FINISH_BONUS * clamp(1 - help * 0.6, 0.3, 1);
-        passU *= clamp(0.4 + help * 0.5, 0.4, 0.85); // heavy help → more willing to kick; light → finish
-      }
-    }
-
-    // Drive cutoff: a defender has stepped into the driver's near path. Whether
-    // the drive actually dies depends on the MATCHUP when it's the on-ball man —
-    // a quick, high-handle, high-IQ guard beats a slow / poor / low-IQ defender
-    // most of the time (he is NOT cut off and drives on to finish); a weak
-    // handler against a good defender is contained most of the time. A help
-    // rotator in the lane is a genuine second wall and always cuts it off.
-    // When cut off, the handler picks up to kick/pull up/reset; charging into a
-    // set defender turns it over some of the time (mostly a live strip; charges
-    // and travels are rare dead balls).
-    if (G.driving && dh < LAYUP_ATTACK_DIST && dh > LAYUP_GO_UP_DIST) {
-      const cutoffDef = driveCutOff(bh, def, h);
-      let contained = false;
-      if (cutoffDef) {
-        if (cutoffDef.assign === bh) {
-          // on-ball: resolve the beat-your-man matchup ONCE per drive so it
-          // doesn't re-roll every tick. Once beaten, he stays beaten this drive.
-          if (G.driveBeaten === undefined) {
-            const edge =
-              (cutoffDef.attr.perimD - handleOf(bh)) * CUTOFF_PERIMD_W +
-              (cutoffDef.attr.speed - bh.attr.speed) * CUTOFF_SPEED_W +
-              (cutoffDef.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
-            G.driveBeaten = !chance(clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX));
-          }
-          contained = !G.driveBeaten;
-          if (!contained) recordDecision("driveBeat");
-        } else {
-          // A help defender stepped up. If the handler has already beaten his man,
-          // a single rotation doesn't wall him off — he attacks the rim and the
-          // help CONTESTS the finish (lower make %, more fouls). Only a genuine
-          // two-man collapse, or help arriving before he's beaten his man, stops
-          // the drive.
-          contained = !onBallBeaten || laneWallCount(bh, def, h) >= 2;
-        }
-      }
-      if (cutoffDef && contained) recordDecision("contained");
-      if (cutoffDef && contained) {
-        G.driving = false;
-        const driveSpeed = Math.hypot(bh.vx, bh.vy);
-        const toP = clamp(
-          CUTOFF_TO_BASE + driveSpeed * CUTOFF_TO_SPEED_SLOPE - (handleOf(bh) - 60) * CUTOFF_TO_HANDLE_SLOPE,
-          0,
-          CUTOFF_TO_CAP,
-        );
-        if (chance(toP)) {
-          bh.stats.tov++;
-          recordTO("cutoff", bh, dh);
-          const r = rng();
-          if (r < CUTOFF_CHARGE_SHARE) {
-            // charge — rare, dead ball
-            logEv(`${cutoffDef.name} draws a charge on ${bh.name} — offensive foul, turnover`, "to");
-            beginScoreTransition(true);
-          } else if (r < CUTOFF_CHARGE_SHARE + CUTOFF_TRAVEL_SHARE) {
-            // picked up his dribble in traffic and travels — dead ball
-            logEv(`${bh.name} gets cut off and travels — turnover`, "to");
-            beginScoreTransition(true);
-          } else {
-            // most common: cut off and stripped — live, runs the other way
-            cutoffDef.stats.stl++;
-            logEv(`${cutoffDef.name} cuts off the drive and strips ${bh.name} — steal!`, "to");
-            beginLiveTransition(cutoffDef, true);
-          }
-          return;
-        }
-        driveU = -1;
-      }
-    }
-
-    // Wide open but not in clean rhythm to shoot (or out past the line): attack
-    // the developing closeout instead of resetting the ball back out.
-    if (wideOpen) {
-      driveU += OPEN_CATCH_DRIVE_BONUS;
-      passU *= OPEN_CATCH_RESET_PENALTY;
-    }
-
-    // Putback: just grabbed an offensive board at the rim — go straight back up
-    // rather than kick it out. Consumed here whether or not he ends up shooting.
-    if (G.putbackBy === bh && dh < PUTBACK_RANGE) {
-      shootU += PUTBACK_SHOOT_BONUS;
-      passU *= 0.5;
-    }
-    G.putbackBy = null;
-
-    // low IQ adds noise to the choice
-    const noise = ((99 - bh.attr.iq) / 99) * 0.6;
-    shootU += randn() * noise;
-    driveU += randn() * noise;
-    passU += randn() * noise;
-    if (postU > 0) postU += randn() * noise;
-
-    const best = Math.max(shootU, driveU, passU, postU);
-
-    // Patience: if the best available is only a so-so pass (nobody has a real
-    // look) and there's time, hold and probe instead of forcing it — invite a
-    // ball screen and let the off-ball men keep moving. A better option next
-    // cycle (a cut comes open, a screen frees a drive) ends the hold naturally.
-    const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
-    const noGoodPass = bestPU < HOLD_PASS_QUALITY;
-    const wantHold =
-      noGoodAttack &&
-      noGoodPass &&
-      best !== postU &&
-      G.shotClock > HOLD_MIN_CLOCK &&
-      (G.holdT ?? 0) < HOLD_MAX_T;
-    if (wantHold) {
-      G.holdT = (G.holdT ?? 0) + 0.4;
-      G.driving = false;
-      recordDecision("hold");
-      holdAndProbe(bh, off, def, h);
-      return;
-    }
-
-    if (best === postU && postU > 0) {
-      G.driving = false;
-      recordDecision("post");
-      postUp(bh, postDef!, contest, postEdge);
-    } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6 || bh.catchShoot)) {
-      G.driving = false;
-      bh.catchShoot = false;
-      recordDecision("shoot");
-      attemptShot(bh, type, contest, pts, mp);
-    } else if (best === driveU) {
-      if (!G.driving) G.driveBeaten = undefined; // fresh drive → re-roll the matchup next tick
-      G.driving = true;
-      recordDecision("drive");
-      bh.target = { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.60) };
-    } else if (bestPass) {
-      G.driving = false;
-      recordDecision("pass");
-      startPass(bh, bestPass);
-    } else {
-      G.driving = false;
-      recordDecision("shoot");
-      attemptShot(bh, type, contest, pts, mp);
-    } // nothing better, just shoot
+    return;
   }
+  G.decideCD = 4; // decide ~ every 0.4s
+  const bh = G.ball.holder;
+  if (!bh) return;
+  recordTouch(bh.name);
+
+  // ----- A) on-ball turnover / strip check (before any shoot/drive/pass) -----
+  {
+    const onBallDef = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+    if (onBallDef) {
+      const stealEdge = (onBallDef.attr.steal - handleOf(bh)) * STRIP_STEAL_SLOPE;
+      const iqEdge = (onBallDef.attr.iq - bh.attr.iq) * STRIP_IQ_SLOPE;
+      let tovP =
+        (ON_BALL_TOV_BASE + Math.max(0, stealEdge) + Math.max(0, iqEdge)) *
+        tuning.turnovers.onBallScale *
+        STRIP_PRESSURE_MULT[tac.pressure] *
+        tendencyFactor(effectiveTendencies(onBallDef).gambleSteal);
+      if (G.driving) tovP *= STRIP_DRIVE_MULT;
+      tovP = clamp(tovP, 0, ON_BALL_TOV_CAP);
+      if (chance(tovP)) {
+        bh.stats.tov++;
+        recordTO("strip", bh, dist(bh, h));
+        if (chance(STRIP_CLEAN_SHARE)) {
+          onBallDef.stats.stl++;
+          logEv(`${onBallDef.name} strips ${bh.name} — steal!`, "to");
+          G.driving = false;
+          beginLiveTransition(onBallDef, true);
+        } else {
+          const recover = nearestDef(bh, def).d || onBallDef;
+          logEv(`${bh.name} loses the handle — turnover`, "to");
+          G.driving = false;
+          beginLiveTransition(recover);
+        }
+        return;
+      }
+    }
+  }
+
+  // The strip roll did not turn it over; if there's no scored decision (no
+  // holder at decide time) bail. `ball` is computed from the same snapshot.
+  if (!ball || ball.who !== bh) return;
+
+  const { type, contest, mp, pts, open, dh, bestPass, bestPU, postDef, postEdge, toward } = ball;
+  let { shootU, driveU, passU, postU } = ball;
+
+  // Putback consume: the scoring bonus was already applied pre-noise in decide;
+  // the side-effect clear happens here whether or not he ends up shooting.
+  G.putbackBy = null;
+
+  // ----- B) low IQ adds noise to the choice -----
+  const noise = ((99 - bh.attr.iq) / 99) * 0.6;
+  shootU += randn() * noise;
+  driveU += randn() * noise;
+  passU += randn() * noise;
+  if (postU > 0) postU += randn() * noise;
+
+  // ----- C) drive cutoff: matchup roll + turnover/charge/travel rolls -----
+  if (G.driving && dh < LAYUP_ATTACK_DIST && dh > LAYUP_GO_UP_DIST) {
+    const cutoffDef = driveCutOff(bh, def, h);
+    let contained = false;
+    if (cutoffDef) {
+      if (cutoffDef.assign === bh) {
+        if (G.driveBeaten === undefined) {
+          const edge =
+            (cutoffDef.attr.perimD - handleOf(bh)) * CUTOFF_PERIMD_W +
+            (cutoffDef.attr.speed - bh.attr.speed) * CUTOFF_SPEED_W +
+            (cutoffDef.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
+          G.driveBeaten = !chance(clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX));
+        }
+        contained = !G.driveBeaten;
+        if (!contained) recordDecision("driveBeat");
+      } else {
+        const onBallBeaten = (() => {
+          const ob = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+          return ob ? dist(ob, h) > dh - LAYUP_BEATEN_BEHIND || dist(ob, bh) > LAYUP_BEATEN_GAP : true;
+        })();
+        contained = !onBallBeaten || laneWallCount(bh, def, h) >= 2;
+      }
+    }
+    if (cutoffDef && contained) recordDecision("contained");
+    if (cutoffDef && contained) {
+      G.driving = false;
+      const driveSpeed = Math.hypot(bh.vx, bh.vy);
+      const toP = clamp(
+        CUTOFF_TO_BASE + driveSpeed * CUTOFF_TO_SPEED_SLOPE - (handleOf(bh) - 60) * CUTOFF_TO_HANDLE_SLOPE,
+        0,
+        CUTOFF_TO_CAP,
+      );
+      if (chance(toP)) {
+        bh.stats.tov++;
+        recordTO("cutoff", bh, dh);
+        const r = rng();
+        if (r < CUTOFF_CHARGE_SHARE) {
+          logEv(`${cutoffDef.name} draws a charge on ${bh.name} — offensive foul, turnover`, "to");
+          beginScoreTransition(true);
+        } else if (r < CUTOFF_CHARGE_SHARE + CUTOFF_TRAVEL_SHARE) {
+          logEv(`${bh.name} gets cut off and travels — turnover`, "to");
+          beginScoreTransition(true);
+        } else {
+          cutoffDef.stats.stl++;
+          logEv(`${cutoffDef.name} cuts off the drive and strips ${bh.name} — steal!`, "to");
+          beginLiveTransition(cutoffDef, true);
+        }
+        return;
+      }
+      driveU = -1;
+    }
+  }
+
+  // ----- D) selection + execution -----
+  const best = Math.max(shootU, driveU, passU, postU);
+
+  const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
+  const noGoodPass = bestPU < HOLD_PASS_QUALITY;
+  const wantHold =
+    noGoodAttack &&
+    noGoodPass &&
+    best !== postU &&
+    G.shotClock > HOLD_MIN_CLOCK &&
+    (G.holdT ?? 0) < HOLD_MAX_T;
+  if (wantHold) {
+    G.holdT = (G.holdT ?? 0) + 0.4;
+    G.driving = false;
+    recordDecision("hold");
+    holdAndProbe(bh, off, def, h);
+    return;
+  }
+
+  if (best === postU && postU > 0) {
+    G.driving = false;
+    recordDecision("post");
+    postUp(bh, postDef!, contest, postEdge);
+  } else if (best === shootU && (open > 0.2 || G.shotClock < 8 || dh < 6 || bh.catchShoot)) {
+    G.driving = false;
+    bh.catchShoot = false;
+    recordDecision("shoot");
+    attemptShot(bh, type, contest, pts, mp);
+  } else if (best === driveU) {
+    if (!G.driving) G.driveBeaten = undefined; // fresh drive → re-roll the matchup next tick
+    G.driving = true;
+    recordDecision("drive");
+    bh.target = toward;
+  } else if (bestPass) {
+    G.driving = false;
+    recordDecision("pass");
+    startPass(bh, bestPass);
+  } else {
+    G.driving = false;
+    recordDecision("shoot");
+    attemptShot(bh, type, contest, pts, mp);
+  } // nothing better, just shoot
 }
 
 /* Drive cutoff: returns the defender who has stepped into the driver's near path
@@ -958,8 +745,318 @@ function rimHelp(bh: Player, def: Player[], h: Point): number {
   return clamp(v, 0, 1);
 }
 
-/* primary action: pick & roll or motion, plus off-ball movement for everyone. */
-function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
+/* ---------- OFF-BALL SHARED SETUP ----------
+   The deterministic spacing inputs both decideOffBall and resolveOffBall need:
+   the mover list (non-handler offensive players, the active pnr screener excluded),
+   their role-true perimeter/inside home spots, the defender-by-assignment index,
+   and the ball-reactive context (driving, justPassed, passer, earlyClock). Pure:
+   reads frozen-equivalent live state, no rng, no mutation. */
+interface OffBallSetup {
+  off: Player[];
+  def: Player[];
+  h: Point;
+  dir: number;
+  bh: Player;
+  spots: Point[];
+  perimeterSpots: Point[];
+  insideSpots: Point[];
+  homeOf: Map<Player, Point>;
+  defByAssign: Map<Player, Player>;
+  movers: Player[];
+  driving: boolean;
+  driveLow: boolean;
+  justPassed: boolean;
+  passer: Player | null;
+  earlyClock: number;
+}
+
+function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
+  const off = offTeam(),
+    def = defTeam(),
+    h = hoop(),
+    tac = s.tacOff;
+  const dir = G.attackHoop === "R" ? -1 : 1;
+  const spots = spotsFor(G.attackHoop);
+  const driving = !!G.driving && dist(bh, h) < 20;
+  const driveLow = bh.y < 25;
+  const justPassed = G.decideCD === 3;
+  const passer = G.pendingAssist || null;
+  const earlyClock = clamp((G.shotClock - (24 - CUT_EARLY_CLOCK_T)) / CUT_EARLY_CLOCK_T, 0, 1);
+
+  const movers: Player[] = [];
+  for (const p of off) {
+    if (p === bh) continue;
+    if (tac.action === "pnr" && G.screen?.screener === p) continue; // active pnr screener is owned by pnr logic
+    movers.push(p);
+  }
+  const bigs = movers.filter(isInsidePlayer);
+  const perimeterSpots = [spots[1], spots[2], spots[3], spots[4]];
+  const insideSpots: Point[] = [
+    { x: h.x + dir * INSIDE_SHORT_X, y: 13 },
+    { x: h.x + dir * INSIDE_SHORT_X, y: 37 },
+    { x: h.x + dir * DUNKER_X, y: 13 },
+    { x: h.x + dir * DUNKER_X, y: 37 },
+  ];
+  const sortByObSpot = (a: Player, b: Player) => (a.ob?.spot ?? 0) - (b.ob?.spot ?? 0);
+  const shooters = movers.filter((p) => !isInsidePlayer(p)).sort(sortByObSpot);
+  bigs.sort(sortByObSpot);
+  const homeOf = new Map<Player, Point>();
+  shooters.forEach((p, i) => homeOf.set(p, perimeterSpots[i % perimeterSpots.length]));
+  bigs.forEach((p, i) => homeOf.set(p, insideSpots[i % insideSpots.length]));
+
+  const defByAssign = new Map<Player, Player>();
+  for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
+
+  return {
+    off,
+    def,
+    h,
+    dir,
+    bh,
+    spots,
+    perimeterSpots,
+    insideSpots,
+    homeOf,
+    defByAssign,
+    movers,
+    driving,
+    driveLow,
+    justPassed,
+    passer,
+    earlyClock,
+  };
+}
+
+/* ---------- 4) OFF-BALL DECIDE (pure, utility) ----------
+   The pure off-ball UTILITY decider. For each non-handler mover:
+   - MID-COMMITMENT (in cut / fill / screen): return the deterministic continuation
+     target flagged `committed` — do NOT re-score (hysteresis; prevents jitter). The
+     commitment's lifetime/abort is the same deterministic duration the legacy state
+     machine used (handled in RESOLVE).
+   - FREE (in "space"): compute the holdSpace spacing target (the reserved-set pass)
+     and SCORE the candidate actions — holdSpace, cut (basket / backdoor / give-and-
+     go), screen (for the handler), lift (weak-side relocation) — each modulated by
+     effectiveTendencies. RESOLVE adds noise, picks the winner, and commits it.
+   Spacing uses the reserved-set pass (movers in fixed order, each chosen target
+   accumulated). Pure: reads only the snapshot, no rng, no mutation of G/ob/targets.
+   This reserved set does NOT see same-tick commitments of earlier movers (those are
+   committed in resolve); that 1-tick spacing lag is the intended behavior change.
+   See docs/decide-pipeline-design.md. */
+export function decideOffBall(s: Snapshot): OffBallDecision[] {
+  const bh = G.ball.holder;
+  if (!bh) return []; // ball in flight: resolve holds spacing, no per-mover decisions
+  const { off, def, h, dir, spots, perimeterSpots, insideSpots, homeOf, defByAssign, movers, driving, driveLow, justPassed, passer, earlyClock } =
+    offBallSetup(s, bh);
+  const out: OffBallDecision[] = [];
+
+  const reserved: ReservedTarget[] = [];
+  if (bh.target) reserved.push({ p: bh, point: bh.target, inside: false });
+  for (const p of offTeam()) {
+    if (p === bh || movers.includes(p) || !p.target) continue;
+    reserved.push({ p, point: p.target, inside: p.role === "screener" || isInsidePlayer(p) });
+  }
+  // snapshot-derived reservations (decide does NOT see same-tick commitments)
+  let driveRelocationUsed = false;
+  const cutCommitted = movers.some((p) => p.ob?.state === "cut");
+  const screenCommitted = movers.some((p) => p.ob?.state === "screen");
+
+  // on-ball defender pressure on the handler (drives the screen utility)
+  const onBallDef = def.find((dd) => dd.assign === bh) || nearestDef(bh, def).d;
+  const handlerPressure = onBallDef ? clamp(1 - dist(onBallDef, bh) / 6, 0, 1) : 0;
+  const handlerThreat = threat(bh);
+
+  for (const p of movers) {
+    const ob = p.ob;
+    if (!ob) continue;
+    const d = defByAssign.get(p);
+    const tend = effectiveTendencies(p);
+    const cutFactor = tendencyFactor(tend.driveRim);
+    const screenFactor = tendencyFactor(tend.screen);
+    const inside = isInsidePlayer(p);
+    const postThreat = tend.postUp >= POST_OFFBALL_PIVOT;
+    let home = homeOf.get(p) || spots[ob.spot] || spots[1];
+    if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 15 : 35 };
+    const spacingOptions = inside ? insideSpots : perimeterSpots;
+
+    const dec: OffBallDecision = {
+      who: p,
+      to: { x: home.x, y: home.y },
+      candidates: [],
+      committed: false,
+      cutState: false,
+      fillState: false,
+      screenState: false,
+      tookDriveRelocate: false,
+      heldDriving: false,
+      heldDwell: false,
+      retarget: false,
+    };
+
+    // --- cut in progress (committed) ---
+    if (ob.state === "cut") {
+      dec.committed = true;
+      dec.cutState = true;
+      dec.to = { x: h.x + dir * 2.5, y: ob.cutY as number };
+      reserved.push({ p, point: dec.to, inside: true });
+      out.push(dec);
+      continue;
+    }
+    // --- fill in progress (committed) ---
+    if (ob.state === "fill") {
+      dec.committed = true;
+      dec.fillState = true;
+      const fillTo = ob.fill || home;
+      dec.to = reserveAwareTarget(p, fillTo, spacingOptions, reserved, def, h, inside);
+      reserved.push({ p, point: dec.to, inside });
+      out.push(dec);
+      continue;
+    }
+    // --- screen in progress (committed) ---
+    if (ob.state === "screen") {
+      dec.committed = true;
+      dec.screenState = true;
+      if (ob.screenTarget) {
+        dec.to = ob.screenTarget;
+        reserved.push({ p, point: dec.to, inside: true });
+      }
+      // (no screenTarget → resolve drops to space; spacing target stays = home)
+      out.push(dec);
+      continue;
+    }
+
+    // --- spacing read (the holdSpace target) ---
+    let tgt: Point = { x: home.x, y: home.y };
+    if (shouldClearLane(p, h)) {
+      tgt = laneClearSpot(p, home, h, dir);
+    } else if (driving) {
+      const onDriveSide = p.y < 25 === driveLow;
+      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive && !driveRelocationUsed) {
+        tgt = { x: home.x, y: 50 - home.y };
+        dec.tookDriveRelocate = true;
+        driveRelocationUsed = true; // single weak-side relocation per drive tick
+      } else if (p.target) {
+        // hold current (frozen prior) target while the drive continues
+        dec.heldDriving = true;
+        dec.to = p.target;
+        reserved.push({ p, point: dec.to, inside });
+        out.push(dec);
+        continue;
+      }
+    }
+
+    // DWELL (spacing only): hold the floor-spacing spot for the dwell window, and do
+    // not re-score actions during the dwell — a brief settle after each relocation.
+    const triggerFired = shouldClearLane(p, h) || justPassed || (driving && !ob.relocatedForDrive);
+    if (!driving && !triggerFired && ob.t < SPACE_DWELL_MIN && p.target) {
+      dec.heldDwell = true;
+      dec.to = p.target;
+      reserved.push({ p, point: dec.to, inside });
+      out.push(dec);
+      continue;
+    }
+
+    // holdSpace target: reserve-aware spacing spot. Only a meaningful shift counts
+    // as a relocation (else keep the prior target so we don't twitch).
+    if (!driving && !shouldClearLane(p, h) && d && dist(d, p) < 7) {
+      const away = Math.sign(p.y - d.y) || 1;
+      tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
+    }
+    const holdTarget = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
+    const prior = p.target;
+    const holdShifts = !prior || dist(holdTarget, prior) >= RETARGET_MIN_SHIFT;
+    const holdApplied: Point = holdShifts || !prior ? holdTarget : prior;
+    dec.to = holdApplied;
+    dec.retarget = holdShifts; // resolve resets ob.t = 0 only on a real relocation
+
+    // --- SCORE candidate actions (free mover) ---
+    const cands: OffBallCandidate[] = [{ kind: "holdSpace", util: HOLD_SPACE_BASE, to: holdApplied }];
+
+    if (!driving && !shouldClearLane(p, h)) {
+      const finishW = (p.attr.finishing - 50) * CUT_UTIL_FINISH_W;
+      const laneOpen = isLaneClear(p, def, h);
+      // backdoor read: tight ball-side denial by my defender + I'm a threat
+      const overplayed = d && dist(d, p) < 3.0 && dist(d, h) > dist(p, h) - 1 && threat(p) > 0.45;
+      const cutY = overplayed ? (p.y < 25 ? 20 : 30) : p.y < 25 ? 19 : 31;
+
+      // cut: basket / backdoor / give-and-go. Only when no teammate is already
+      // cutting (one cutter in the lane at a time, matching the legacy mutex).
+      if (!cutCommitted) {
+        let cutU =
+          CUT_UTIL_BASE +
+          (justPassed ? CUT_UTIL_PASS_BONUS : 0) +
+          earlyClock * CUT_UTIL_EARLY_BONUS +
+          (overplayed ? CUT_UTIL_OVERPLAY_BONUS : 0) +
+          (laneOpen ? CUT_UTIL_LANE_BONUS : 0) +
+          finishW +
+          (justPassed && p === passer ? GIVEGO_UTIL_BONUS : 0);
+        cutU *= cutFactor;
+        cands.push({ kind: "cut", util: cutU, to: { x: h.x + dir * 2.5, y: cutY }, cutY });
+      }
+
+      // screen for the handler: pressured handler + dangerous handler are worth a pick.
+      if (!screenCommitted && !cutCommitted && onBallDef && (tend.driveRim > 50 || p.attr.iq > 55)) {
+        const hx = bh.x - h.x;
+        const hy = bh.y - h.y;
+        const hlen = Math.hypot(hx, hy) || 1;
+        const ux = hx / hlen;
+        const uy = hy / hlen;
+        let perpX = -uy;
+        let perpY = ux;
+        if ((p.y - onBallDef.y) * perpY + (p.x - onBallDef.x) * perpX < 0) {
+          perpX = -perpX;
+          perpY = -perpY;
+        }
+        const screenTo = {
+          x: clamp(onBallDef.x + perpX * SCREEN_SET_DIST, 3, COURT_L - 3),
+          y: clamp(onBallDef.y + perpY * SCREEN_SET_DIST, 3, 47),
+        };
+        let screenU =
+          SCREEN_UTIL_BASE +
+          SCREEN_UTIL_PRESSURE_BONUS * handlerPressure +
+          SCREEN_UTIL_THREAT_W * handlerThreat;
+        screenU *= screenFactor;
+        cands.push({ kind: "screen", util: screenU, to: screenTo, screenTo });
+      }
+
+      // lift: weak-side relocation into open space when the ball changes side.
+      if (justPassed && p !== passer) {
+        const liftTo = reserveAwareTarget(
+          p,
+          mostOpenSpot(p, spacingOptions, off, def, h),
+          spacingOptions,
+          reserved,
+          def,
+          h,
+          inside,
+        );
+        const liftU = (LIFT_UTIL_BASE + LIFT_UTIL_BALLMOVE_BONUS) * tendencyFactor(tend.pass);
+        cands.push({ kind: "lift", util: liftU, to: liftTo });
+      }
+    }
+
+    dec.candidates = cands;
+    reserved.push({ p, point: dec.to, inside });
+    out.push(dec);
+  }
+  return out;
+}
+
+/* ---------- 4) OFF-BALL RESOLVE ----------
+   Applies the decideOffBall() output and does the noise + selection + state-machine
+   half: for a MID-COMMITMENT mover it advances/expires the commitment (cut→fill→
+   space, screen hold/abort) and applies the continuation target; for a FREE mover
+   it adds decision NOISE (randn()*OFFBALL_NOISE) to each scored candidate, picks
+   the best, COMMITS it (sets ob.state, resets ob.t, applies its target). holdSpace
+   wins → stay spacing. It also keeps the pnr PHASE logic (bringup→screen→roll,
+   screenPop) and the lane-clear handling. ALL off-ball rng lives here, consumed in
+   fixed per-mover order, so the seeded stream stays a port spec. Spacing targets
+   are NOT recomputed here (decideOffBall owns them). See
+   docs/decide-pipeline-design.md. */
+function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
+  const off = offTeam(),
+    def = defTeam(),
+    h = hoop(),
+    tac = s.tacOff;
   const dir = G.attackHoop === "R" ? -1 : 1;
   G.actionT += DT;
   const sp0 = spotsFor(G.attackHoop);
@@ -1028,8 +1125,142 @@ function runAction(off: Player[], def: Player[], h: Point, tac: Tactics): void {
     G.screen = null;
   }
 
-  // off-ball movement for all non-handler players (the pnr screener is handled above)
-  offBallMove(off, def, h, dir, tac);
+  // ----- apply off-ball decisions: commitment lifecycle + noise/select/commit -----
+  // For each mover (fixed order): if mid-commitment, advance/expire its cut/fill/
+  // screen and apply the continuation target. Else add noise to the scored
+  // candidates, pick the winner, and COMMIT it (set ob.state, reset ob.t, apply
+  // target). holdSpace winning means stay spacing. All off-ball rng (the noise)
+  // lives here, consumed in fixed per-mover order.
+  {
+    const { perimeterSpots, homeOf, spots, movers } = offBallSetup(s, bh);
+    const homeForMover = (p: Player): Point => {
+      const ob = p.ob;
+      let home = homeOf.get(p) || (ob ? spots[ob.spot] : spots[1]) || spots[1];
+      const tend = effectiveTendencies(p);
+      if (tend.postUp >= POST_OFFBALL_PIVOT && (p.offLaneT ?? 0) < 1.2)
+        home = { x: h.x + dir * INSIDE_X, y: (ob?.spot ?? 0) % 2 ? 15 : 35 };
+      return home;
+    };
+    // mutual exclusion: at most one cutter / one screener at a time. Seed from the
+    // snapshot states (committed movers count), then grow as new commitments fire.
+    let cutCommitted = movers.some((p) => p.ob?.state === "cut");
+    let screenCommitted = movers.some((p) => p.ob?.state === "screen");
+    for (const dec of offBallIntents) {
+      const p = dec.who;
+      const ob = p.ob;
+      if (!ob) continue;
+      ob.t += DT;
+      const inside = isInsidePlayer(p);
+      p.dbgIntent = ob.state;
+
+      // --- cut in progress (committed) ---
+      if (dec.cutState) {
+        p.target = dec.to;
+        cutCommitted = true;
+        if (dist(p, { x: h.x, y: 25 }) < 5.5 || ob.t > 2.0) {
+          ob.state = "fill";
+          ob.t = 0;
+          ob.fill = inside ? homeForMover(p) : mostOpenSpot(p, perimeterSpots, off, def, h);
+        }
+        continue;
+      }
+      // --- fill in progress (committed) ---
+      if (dec.fillState) {
+        p.target = dec.to;
+        ob.fill = dec.to;
+        if (dist(p, p.target) < 3 || ob.t > 2.6) {
+          ob.state = "space";
+          ob.t = 0;
+        }
+        continue;
+      }
+      // --- screen in progress (committed) ---
+      if (dec.screenState) {
+        if (ob.screenTarget) {
+          p.target = dec.to;
+          screenCommitted = true;
+          if (G.driving) {
+            ob.state = "cut";
+            ob.t = 0;
+            ob.cutY = bh.y < 25 ? 19 : 31;
+            ob.screenTarget = null;
+            cutCommitted = true;
+          } else if (ob.t > SCREEN_HOLD_MAX) {
+            ob.state = "space";
+            ob.t = 0;
+            ob.screenTarget = null;
+          }
+        } else {
+          ob.state = "space";
+          ob.t = 0;
+        }
+        continue;
+      }
+
+      // --- free mover: dbg + drive-relocation bookkeeping ---
+      // reset drive-relocation flag when driving ends
+      if (!s.driving && ob.relocatedForDrive) ob.relocatedForDrive = false;
+      p.dbgIntent = shouldClearLane(p, h)
+        ? "laneclear"
+        : effectiveTendencies(p).postUp >= POST_OFFBALL_PIVOT
+          ? "post"
+          : inside
+            ? "space-inside"
+            : "space-perim";
+
+      // apply the decided spacing target; a committed action below overrides it.
+      p.target = dec.to;
+
+      // driving-hold: decide held the prior target; no scoring, no ob.t reset.
+      if (dec.heldDriving) continue;
+      // driving-relocate: decide moved weak-side; mark the edge-gated flag.
+      if (dec.tookDriveRelocate) ob.relocatedForDrive = true;
+      // dwell-hold: settle the spot, no scoring this tick.
+      if (dec.heldDwell) continue;
+
+      // noise + select among the scored candidates.
+      let best: OffBallCandidate | null = null;
+      let bestU = -Infinity;
+      for (const c of dec.candidates) {
+        // a cut/screen already taken this tick by an earlier mover is unavailable.
+        if (c.kind === "cut" && cutCommitted) continue;
+        if (c.kind === "screen" && (screenCommitted || cutCommitted)) continue;
+        const u = c.util + randn() * OFFBALL_NOISE;
+        if (u > bestU) {
+          bestU = u;
+          best = c;
+        }
+      }
+
+      if (best && best.kind === "cut") {
+        ob.state = "cut";
+        ob.t = 0;
+        ob.cutY = best.cutY ?? (p.y < 25 ? 19 : 31);
+        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
+        cutCommitted = true;
+        continue;
+      }
+      if (best && best.kind === "screen") {
+        ob.state = "screen";
+        ob.t = 0;
+        ob.screenTarget = best.screenTo ?? best.to;
+        p.target = best.to;
+        screenCommitted = true;
+        continue;
+      }
+      if (best && best.kind === "lift") {
+        ob.state = "fill";
+        ob.t = 0;
+        ob.fill = best.to;
+        p.target = best.to;
+        continue;
+      }
+
+      // holdSpace won (or no candidate): stay spacing. Reset the dwell timer iff a
+      // real relocation occurred this tick.
+      if (dec.retarget) ob.t = 0;
+    }
+  }
 }
 
 /* Classifies an off-ball player as an INSIDE (big) role vs a perimeter shooter.
@@ -1176,279 +1407,6 @@ function reserveAwareTarget(
   return out;
 }
 
-/* Off-ball movement: role-true spacing (bigs inside, shooters on the perimeter),
-   relocation to open space, lane-clearing on drives, ball-reactive basket cuts
-   with refill, give-and-go by the passer, weak-side lift, and backdoor cuts
-   against tight ball-side denial. Generates open looks against help defense. */
-function offBallMove(off: Player[], def: Player[], h: Point, dir: number, tac: Tactics): void {
-  const bh = G.ball.holder;
-  if (!bh) return;
-  const spots = spotsFor(G.attackHoop);
-  const driving = G.driving && dist(bh, h) < 20;
-  const driveLow = bh.y < 25;
-  // a pass was just caught this tick (set in possession.tick) -> trigger more motion
-  const justPassed = G.decideCD === 3;
-  const passer = G.pendingAssist || null;
-  const earlyClock = clamp((G.shotClock - (24 - CUT_EARLY_CLOCK_T)) / CUT_EARLY_CLOCK_T, 0, 1);
-
-  // role-true spot assignment: collect the off-ball movers, hand the perimeter
-  // spotsFor() slots to the shooters and the inside slots to the bigs.
-  const movers: Player[] = [];
-  for (const p of off) {
-    if (p === bh) continue;
-    if (tac.action === "pnr" && G.screen?.screener === p) continue; // the ACTUAL screener is owned by pnr logic; a non-screening big (e.g. when the screener rotates) must still get off-ball movement, not be orphaned in the lane
-    movers.push(p);
-  }
-  const bigs = movers.filter(isInsidePlayer);
-  // perimeter spots are all spotsFor slots except the handler slot (index 0)
-  const perimeterSpots = [spots[1], spots[2], spots[3], spots[4]];
-  // inside homes stay adjacent to the lane; post threats flash to the block
-  // only while their lane timer is low.
-  const insideSpots: Point[] = [
-    { x: h.x + dir * INSIDE_SHORT_X, y: 13 }, // left short corner
-    { x: h.x + dir * INSIDE_SHORT_X, y: 37 }, // right short corner
-    { x: h.x + dir * DUNKER_X, y: 13 }, // left dunker-adjacent
-    { x: h.x + dir * DUNKER_X, y: 37 }, // right dunker-adjacent
-  ];
-  // stable assignment by the player's seeded spot index so it does not flip-flop
-  const sortByObSpot = (a: Player, b: Player) => (a.ob?.spot ?? 0) - (b.ob?.spot ?? 0);
-  const shooters = movers.filter((p) => !isInsidePlayer(p)).sort(sortByObSpot);
-  bigs.sort(sortByObSpot);
-  const homeOf = new Map<Player, Point>();
-  shooters.forEach((p, i) => homeOf.set(p, perimeterSpots[i % perimeterSpots.length]));
-  bigs.forEach((p, i) => homeOf.set(p, insideSpots[i % insideSpots.length]));
-
-  // index defenders by their assignment once (first match wins, matching find())
-  const defByAssign = new Map<Player, Player>();
-  for (const x of def) if (x.assign && !defByAssign.has(x.assign)) defByAssign.set(x.assign, x);
-  const reserved: ReservedTarget[] = [];
-  if (bh.target) reserved.push({ p: bh, point: bh.target, inside: false });
-  for (const p of off) {
-    if (p === bh || movers.includes(p) || !p.target) continue;
-    reserved.push({ p, point: p.target, inside: p.role === "screener" || isInsidePlayer(p) });
-  }
-  let laneCutReserved = movers.some((p) => p.ob?.state === "cut");
-  let driveRelocationUsed = false;
-  const screenReserved = movers.some((p) => p.ob?.state === "screen");
-  for (const p of movers) {
-    const ob = p.ob;
-    if (!ob) continue;
-    ob.t += DT;
-    const d = defByAssign.get(p);
-    const tend = effectiveTendencies(p);
-    const cutFactor = tendencyFactor(tend.driveRim);
-    const inside = isInsidePlayer(p);
-    const postThreat = tend.postUp >= POST_OFFBALL_PIVOT;
-    let home = homeOf.get(p) || spots[ob.spot] || spots[1];
-    // a high-postUp big posts up on the block so the pass logic can feed him
-    // Post at the lane EDGE (just OUTSIDE the painted lane, y<17 / y>33) rather
-    // than inside it — a real low block straddles the line, and sitting inside is
-    // what accrues offensive three-seconds when a possession runs long.
-    if (postThreat && (p.offLaneT ?? 0) < 1.2) home = { x: h.x + dir * INSIDE_X, y: ob.spot % 2 ? 15 : 35 };
-    const spacingOptions = inside ? insideSpots : perimeterSpots;
-    // default intent tag = current off-ball state; refined below for the spacing read
-    p.dbgIntent = ob.state;
-
-    // --- cut in progress ---
-    if (ob.state === "cut") {
-      p.target = { x: h.x + dir * 2.5, y: ob.cutY as number };
-      reserved.push({ p, point: p.target, inside: true });
-      if (dist(p, { x: h.x, y: 25 }) < 5.5 || ob.t > 2.0) {
-        ob.state = "fill";
-        ob.t = 0;
-        // bigs refill inside; shooters fill the most open perimeter spot
-        ob.fill = inside ? home : mostOpenSpot(p, perimeterSpots, off, def, h);
-      }
-      continue;
-    }
-    if (ob.state === "fill") {
-      // refill the chosen open spot (an inside spot for bigs, a perimeter spot
-      // for shooters); fall back to home if none was recorded
-      const fillTo = ob.fill || home;
-      p.target = reserveAwareTarget(p, fillTo, spacingOptions, reserved, def, h, inside);
-      ob.fill = p.target;
-      reserved.push({ p, point: p.target, inside });
-      if (dist(p, p.target) < 3 || ob.t > 2.6) {
-        ob.state = "space";
-        ob.t = 0;
-      }
-      continue;
-    }
-
-    // --- screen in progress ---
-    if (ob.state === "screen") {
-      if (ob.screenTarget) {
-        p.target = ob.screenTarget;
-        reserved.push({ p, point: p.target, inside: true });
-        if (G.driving) {
-          ob.state = "cut";
-          ob.t = 0;
-          ob.cutY = bh.y < 25 ? 19 : 31;
-          ob.screenTarget = null;
-        } else if (ob.t > SCREEN_HOLD_MAX) {
-          ob.state = "space";
-          ob.t = 0;
-          ob.screenTarget = null;
-        }
-      } else {
-        ob.state = "space";
-        ob.t = 0;
-      }
-      continue;
-    }
-
-    // --- spacing read ---
-    // FIX 4: reset drive-relocation flag when driving ends
-    if (!driving && ob.relocatedForDrive) ob.relocatedForDrive = false;
-
-    // Meaningful triggers that override the dwell: lane-clear, just passed, or the
-    // FIRST tick of a drive. driving is edge-gated (relocatedForDrive) so a drive
-    // doesn't bypass the dwell every tick it lasts — only the one relocation.
-    // NOTE: the dwell is applied LOWER DOWN, gating only the spacing relocation —
-    // not the cuts/give-and-go/drive logic, which must stay free so dwelling the
-    // floor doesn't also kill the slashing.
-    const triggerFired = shouldClearLane(p, h) || justPassed || (driving && !ob.relocatedForDrive);
-
-    let tgt: Point = { x: home.x, y: home.y };
-    p.dbgIntent = shouldClearLane(p, h) ? "laneclear" : postThreat ? "post" : inside ? "space-inside" : "space-perim";
-    if (shouldClearLane(p, h)) {
-      tgt = laneClearSpot(p, home, h, dir);
-    } else if (driving) {
-      // clear the strong side: if I'm on the drive side, relocate to the weak side
-      // (this both opens the lane and sets up the kick-out)
-      // FIX 4: only relocate on the first tick driving applies to this player
-      const onDriveSide = p.y < 25 === driveLow;
-      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive && !driveRelocationUsed) {
-        tgt = { x: home.x, y: 50 - home.y };
-        ob.relocatedForDrive = true;
-        driveRelocationUsed = true;
-      } else {
-        // hold current target while driving continues
-        if (p.target) {
-          reserved.push({ p, point: p.target, inside });
-          continue;
-        }
-      }
-    } else {
-      // give-and-go: the player who just passed cuts hard to the rim
-      if (!laneCutReserved && justPassed && p === passer && chance(GIVE_AND_GO_CHANCE * cutFactor)) {
-        ob.state = "cut";
-        ob.t = 0;
-        ob.cutY = p.y < 25 ? 19 : 31;
-        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
-        reserved.push({ p, point: p.target, inside: true });
-        laneCutReserved = true;
-        continue;
-      }
-      // backdoor vs tight ball-side denial (scaled by driveRim)
-      if (
-        !laneCutReserved &&
-        d &&
-        dist(d, p) < 3.0 &&
-        dist(d, h) > dist(p, h) - 1 &&
-        threat(p) > 0.45 &&
-        chance(BACKDOOR_CHANCE * cutFactor)
-      ) {
-        ob.state = "cut";
-        ob.t = 0;
-        ob.cutY = p.y < 25 ? 20 : 30;
-        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
-        reserved.push({ p, point: p.target, inside: true });
-        laneCutReserved = true;
-        continue;
-      }
-      // weak-side lift/fill into open space the moment the ball moves
-      if (justPassed && p !== passer && chance(POST_REACT_CHANCE)) {
-        ob.state = "fill";
-        ob.t = 0;
-        ob.fill = reserveAwareTarget(
-          p,
-          mostOpenSpot(p, spacingOptions, off, def, h),
-          spacingOptions,
-          reserved,
-          def,
-          h,
-          inside,
-        );
-        p.target = ob.fill;
-        reserved.push({ p, point: p.target, inside });
-        continue;
-      }
-      // relocate into open space: slide a few feet away from my own defender
-      if (d && dist(d, p) < 7) {
-        const away = Math.sign(p.y - d.y) || 1;
-        tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
-      }
-      // screener intent: an eligible off-ball player moves to set a screen on the on-ball defender
-      if (!screenReserved && !laneCutReserved) {
-        const onBallDef = def.find((d) => d.assign === bh);
-        if (
-          onBallDef &&
-          (effectiveTendencies(p).driveRim > 50 || p.attr.iq > 55) &&
-          chance(SCREEN_CHANCE)
-        ) {
-          const hx = bh.x - h.x;
-          const hy = bh.y - h.y;
-          const hlen = Math.hypot(hx, hy) || 1;
-          const ux = hx / hlen;
-          const uy = hy / hlen;
-          let perpX = -uy;
-          let perpY = ux;
-          if ((p.y - onBallDef.y) * perpY + (p.x - onBallDef.x) * perpX < 0) {
-            perpX = -perpX;
-            perpY = -perpY;
-          }
-          const screenPt: Point = {
-            x: clamp(onBallDef.x + perpX * SCREEN_SET_DIST, 3, COURT_L - 3),
-            y: clamp(onBallDef.y + perpY * SCREEN_SET_DIST, 3, 47),
-          };
-          ob.state = "screen";
-          ob.t = 0;
-          ob.screenTarget = screenPt;
-          p.target = screenPt;
-          reserved.push({ p, point: p.target, inside: true });
-          continue;
-        }
-      }
-
-      // ball-reactive basket cut: base rate scaled by driveRim, with bonuses
-      // the tick a pass is caught and early in the shot clock.
-      const cutChance = clamp(
-        (CUT_BASE_CHANCE + (justPassed ? CUT_PASS_BONUS : 0) + earlyClock * CUT_EARLY_CLOCK_BONUS) * cutFactor,
-        0,
-        CUT_CHANCE_CAP,
-      );
-      if (!laneCutReserved && chance(cutChance)) {
-        ob.state = "cut";
-        ob.t = 0;
-        ob.cutY = p.y < 25 ? 19 : 31;
-        p.target = { x: h.x + dir * 2.5, y: ob.cutY };
-        reserved.push({ p, point: p.target, inside: true });
-        laneCutReserved = true;
-        continue;
-      }
-    }
-    // DWELL (spacing only): cuts/give-and-go/drive relocations above already had
-    // their chance this tick; here we hold the floor-spacing spot for the dwell
-    // window so off-ball players stop perpetually micro-adjusting around the ball.
-    if (!triggerFired && ob.t < SPACE_DWELL_MIN && p.target) {
-      reserved.push({ p, point: p.target, inside });
-      continue;
-    }
-    const candidate = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
-    // FIX 2: only assign new target if it represents a meaningful shift
-    if (!p.target || dist(candidate, p.target) >= RETARGET_MIN_SHIFT) {
-      p.target = candidate;
-      // Restart the dwell on each actual relocation so the player holds the new
-      // spot ~SPACE_DWELL_MIN before re-evaluating again (a recurring pause,
-      // not a one-shot). Without this, ob.t grows monotonically and the dwell
-      // lapses permanently after the first window -> constant re-targeting.
-      ob.t = 0;
-    }
-    reserved.push({ p, point: p.target, inside });
-  }
-}
-
 function mostOpenSpot(p: Player, spots: Point[], off: Player[], def: Player[], h: Point): Point {
   let best = spots[spots.length - 1],
     bs = -1e9;
@@ -1585,3 +1543,255 @@ function startPass(from: Player, to: Player): void {
   G.ball.bspeed = d0 / travelSec;
   G.ball.catchPoint = null;
 }
+
+/* ==================================================================
+   DECIDE PIPELINE — pure offensive deciders (ADDITIVE)
+
+   These mirror the scoring in `offenseDecide()` (ball-handler block) and the
+   off-ball target geometry in `offBallMove()` / `runAction()` / the `p.ob` state
+   machine, but as PURE functions: they only read live/frozen state and RETURN
+   Intents. They never mutate `G`, never consume rng (no chance/rnd/rng/randn),
+   never set `.target`/`.hasBall`/ball state, never write stats, and never call
+   any executor (startPass/attemptShot/postUp/beginLiveTransition/recordTO/etc.).
+
+   Side effects, rng draws, and state transitions deferred to RESOLVE are
+   documented in the RESOLVE SPEC delivered alongside this code.
+
+   During the DECIDE phase the snapshot positions equal the live `Player`
+   positions (the snapshot is taken at tick start, before any mutation), so the
+   existing pure helpers — which read live `Player.x/.y` via `view.ref` — return
+   the same values they would against the snapshot. We reuse them rather than
+   re-deriving geometry, keeping behavior identical to `offenseDecide()`.
+   ================================================================== */
+
+/* ---------- decideOnBall ----------
+   Replicates the shoot / drive / pass / post-up utility SCORING of the
+   ball-handler block (offense.ts) and returns the scored candidates as a
+   BallDecision. Returns null when there is no ball-handler.
+
+   This decider is rng-free and side-effect-free. It computes the four PRE-NOISE
+   utilities plus all context RESOLVE needs to add noise, select the winner, run
+   the drive-cutoff rolls, and execute. What is INTENTIONALLY DEFERRED to RESOLVE
+   (see RESOLVE SPEC / resolveOffense below):
+   - the on-ball strip/turnover roll (chance(tovP)),
+   - the rng decision noise (randn()*noise on each utility),
+   - the per-drive cutoff matchup roll (G.driveBeaten = !chance(...)) and the
+     cutoff turnover roll (chance(toP)) — and the deterministic driveU=-1 it sets,
+   - the wantHold computation and HOLD probe execution (holdAndProbe),
+   - the selection precedence and all execution side effects (ball.state,
+     G.driving set/clear, startPass, attemptShot, postUp, putbackBy consume, etc.).
+
+   Putback (G.putbackBy READ here for scoring): the live code applies the shoot
+   bonus / pass halving BEFORE the noise, so it belongs in the pre-noise scores
+   returned here. The CONSUMPTION (G.putbackBy = null) is a RESOLVE effect. */
+export function decideOnBall(s: Snapshot): BallDecision | null {
+  const bhv = ballHolderViewLocal(s);
+  if (!bhv) return null;
+  const bh = bhv.ref;
+  const off = s.off.map((v) => v.ref);
+  const def = s.def.map((v) => v.ref);
+  const h = s.hoop;
+  const tac = s.tacOff;
+  const tuning = simTunables();
+
+  const dh = dist(bh, h);
+  const type = shotTypeFor(dh);
+  const contest = contestOf(bh, def);
+  const open = clamp(1 - contest, 0, 1);
+  const pts = type === "three" ? 3 : 2;
+  const mp = makeProb(bh, type, contest);
+  const ev = mp * pts;
+
+  const selM = (() => {
+    const sel = tac.shotSel;
+    if (type === "three") return sel === "three" ? 1.4 : sel === "rim" ? 0.55 : 1;
+    if (type === "rim" || type === "close") return sel === "rim" ? 1.4 : sel === "three" ? 0.7 : 1;
+    return sel === "three" ? 0.7 : 1;
+  })();
+  const urg = s.shotClock < 10 ? (10 - s.shotClock) / 10 : 0;
+
+  const tendencies = effectiveTendencies(bh);
+  const shootTend =
+    type === "three" ? tendencies.shootThree : type === "mid" ? tendencies.shootMid : tendencies.driveRim;
+  let shootU = ev * selM * (0.35 + 0.65 * open) + urg * 2.4;
+  if (type === "three") {
+    shootU *= shootTendMult(shootTend) * THREE_UTILITY_MULT * tuning.decisions.threeUtilityScale;
+    const reluctance = clamp((shootTend - 26) / 18, 0, 1) * clamp((64 - shootTend) / 13, 0, 1);
+    const t3 = bh.attr.three;
+    const capable = clamp((t3 - 42) / 16, 0, 1) * clamp((78 - t3) / 16, 0, 1);
+    shootU += THREE_UTILITY_FLOOR * tuning.decisions.threeUtilityScale * open * reluctance * capable;
+  } else {
+    shootU *= tendencyFactor(shootTend);
+  }
+
+  const clockFrac = clamp(s.shotClock / 24, 0, 1);
+  const paceAdj = tac.pace === "fast" ? -PACE_PATIENCE : tac.pace === "slow" ? PACE_PATIENCE : 0;
+  const patience = clamp(BASE_PATIENCE + paceAdj, 0, 1) * clockFrac;
+  shootU *= 1 - patience * (PATIENCE_OPEN_FLOOR + (1 - PATIENCE_OPEN_FLOOR) * (1 - open));
+
+  const wideOpen = bh.catchShoot || contest < OPEN_CATCH_CONTEST;
+  if (wideOpen && open > 0.45) {
+    shootU += CATCH_SHOOT_SHOOT_BONUS * open;
+  }
+
+  const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+  const laneBlock = rimHelp(bh, def, h);
+  let driveU = -1;
+  if (dh > DRIVE_BASE_DIST_MIN) {
+    const defPerimD = onBall ? onBall.attr.perimD : 50;
+    const defSpeed = onBall ? onBall.attr.speed : 50;
+    const defIq = onBall ? onBall.attr.iq : 70;
+    const handleEdge = (handleOf(bh) - defPerimD) * DRIVE_HANDLE_SLOPE;
+    const speedEdge = (bh.attr.speed - defSpeed) * DRIVE_SPEED_SLOPE;
+    const iqBonus = Math.max(0, DRIVE_IQ_PIVOT - defIq) * DRIVE_IQ_SLOPE;
+
+    let lagBonus = 0;
+    if (onBall && onBall.target) {
+      const defLag = dist(onBall.target, bh);
+      if (defLag > DRIVE_LAG_DIST_THRESHOLD) lagBonus = DRIVE_LAG_BONUS;
+    }
+
+    let tightBonus = 0;
+    if (tac.pressure === "tight" && handleOf(bh) >= DRIVE_TIGHT_HANDLE_FLOOR) {
+      tightBonus = DRIVE_TIGHT_BONUS;
+    }
+
+    const offScreenBonus = (() => {
+      if (!onBall) return 0;
+      for (const o of off) {
+        if (o === bh) continue;
+        if (dist(o, onBall) < 4) return DRIVE_SCREEN_BONUS;
+      }
+      return 0;
+    })();
+
+    const continuationBonus = s.driving ? DRIVE_CONTINUATION_BONUS : 0;
+    driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + offScreenBonus + continuationBonus)
+      * (1 - laneBlock * 0.7);
+  }
+
+  if (dh > OPEN_LANE_MIN_DIST) {
+    const laneOpen = isLaneClear(bh, def, h);
+    if (laneOpen) driveU += OPEN_LANE_BONUS;
+  }
+
+  if (tac.shotSel === "rim") driveU += 0.25;
+  if (tac.shotSel === "three") driveU -= 0.2;
+  driveU *= tendencyFactor(tendencies.driveRim) * tuning.decisions.driveUtilityScale;
+
+  if (dh > DRIVE_BASE_DIST_MIN) driveU += urg * DRIVE_URGENCY;
+
+  const giveUpBig = isInsidePlayer(bh) && handleOf(bh) < BIG_GIVEUP_HANDLE && dh > BIG_GIVEUP_DEPTH;
+  if (giveUpBig) driveU *= BIG_DRIVE_SUPPRESS;
+
+  const onBallBeaten = onBall
+    ? dist(onBall, h) > dh - LAYUP_BEATEN_BEHIND || dist(onBall, bh) > LAYUP_BEATEN_GAP
+    : true;
+  const cleanToRim = s.driving && onBallBeaten && laneWallCount(bh, def, h) < 2;
+
+  const driveKickActive = s.driving && dh < DRIVE_KICK_MIN_HANDLER_DIST
+    && !cleanToRim
+    && helpCommittedToDriver(bh, def, h);
+  const kickPassBonus = driveKickActive
+    ? DRIVE_KICK_OPEN_BONUS * clamp((bh.attr.pass - 50) * DRIVE_KICK_PASS_SLOPE + 1, 0.7, 1.5)
+    : 0;
+
+  let bestPass: Player | null = null,
+    bestPU = -1;
+  for (const t of off) {
+    if (t === bh) continue;
+    const tc = contestOf(t, def),
+      to = 1 - tc;
+    const td = dist(t, h),
+      tt = shotTypeFor(td);
+    const tev = makeProb(t, tt, tc) * (tt === "three" ? 3 : 2);
+    const advance = td < dh - 2 ? 0.3 : 0;
+
+    let kickBonus = 0;
+    if (driveKickActive) {
+      const tDef = def.find((d) => d.assign === t);
+      if (tDef && isHelping(tDef, bh, h)) kickBonus = kickPassBonus;
+    }
+    if (t.catchShoot) kickBonus = Math.max(kickBonus, CATCH_SHOOT_PASS_BONUS);
+
+    const postFeedBonus = postFeedValue(t, def, h);
+    const handoffBonus = giveUpBig && handleOf(t) >= BIG_GIVEUP_HANDLE ? HANDOFF_PASS_BONUS : 0;
+
+    const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus
+      - passSelectionPenalty(bh, t, h);
+    if (pu > bestPU) {
+      bestPU = pu;
+      bestPass = t;
+    }
+  }
+  const passBias = s.possClock < 6 ? 0.5 : 0.1;
+  let passU = (bestPU + passBias) * tendencyFactor(tendencies.pass) * tuning.decisions.passUtilityScale;
+
+  const postDef = onBall;
+  let postEdge = 0;
+  let postU = -1;
+  if (postDef && dh <= POST_RANGE && tendencies.postUp >= POST_MIN_TEND) {
+    postEdge = postOffenseRating(bh) - postDefenseRating(postDef);
+    if (postEdge > POST_MIN_EDGE) {
+      postU =
+        (POST_BASE_UTIL + clamp(postEdge, 0, POST_EDGE_CAP) * POST_EDGE_UTIL_MULT) *
+        tendencyFactor(tendencies.postUp) *
+        POST_TEND_MULT;
+    }
+  }
+
+  if (onBallBeaten && dh < LAYUP_ATTACK_DIST && laneWallCount(bh, def, h) < 2) {
+    const help = rimHelp(bh, def, h);
+    if (dh > DRIVE_BASE_DIST_MIN) {
+      driveU += LAYUP_DRIVE_BONUS * clamp(1 - help * 0.5, 0.4, 1);
+    } else {
+      shootU += LAYUP_FINISH_BONUS * clamp(1 - help * 0.6, 0.3, 1);
+      passU *= clamp(0.4 + help * 0.5, 0.4, 0.85);
+    }
+  }
+
+  // Drive cutoff is RESOLVE's job in full: the on-ball beat-your-man roll
+  // (G.driveBeaten), the help-cutoff containment test, the deterministic
+  // driveU=-1 it sets, and the cutoff turnover/charge/travel rolls all happen
+  // after the noise add, in resolveOffense. DECIDE leaves driveU untouched.
+
+  if (wideOpen) {
+    driveU += OPEN_CATCH_DRIVE_BONUS;
+    passU *= OPEN_CATCH_RESET_PENALTY;
+  }
+
+  // Putback (offense.ts): the shoot bonus / pass halving apply BEFORE the noise,
+  // so they belong in the returned pre-noise scores. The CONSUMPTION
+  // (G.putbackBy = null) is a RESOLVE effect.
+  if (G.putbackBy === bh && dh < PUTBACK_RANGE) {
+    shootU += PUTBACK_SHOOT_BONUS;
+    passU *= 0.5;
+  }
+
+  return {
+    who: bh,
+    shootU,
+    driveU,
+    passU,
+    postU,
+    type,
+    contest,
+    mp,
+    pts,
+    open,
+    dh,
+    bestPass,
+    bestPU,
+    postDef,
+    postEdge,
+    toward: { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.6) },
+  };
+}
+
+/* Local frozen ball-holder lookup (mirrors snapshot.ballHolderView without
+   importing it; kept local so this file owns its decide dependencies). */
+function ballHolderViewLocal(s: Snapshot): PlayerView | null {
+  if (s.ball.holderNum == null) return null;
+  return s.off.find((v) => v.num === s.ball.holderNum) ?? null;
+}
+
