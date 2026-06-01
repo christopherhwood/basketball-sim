@@ -2,7 +2,7 @@ import { G, offTeam, defTeam, hoop } from "../core/state.js";
 import { dist, clamp, lerp } from "../core/math.js";
 import { rules } from "../core/rules.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
-import type { Player, Point } from "../types.js";
+import type { Player, Point, Tactics } from "../types.js";
 import type { Snapshot } from "./snapshot.js";
 import type { DecidedIntent, Intent } from "./intent.js";
 
@@ -99,11 +99,74 @@ export function perimeterThreat(p: Player): number {
     1,
   );
 }
+
+/* How squarely `navDef` is screened trying to reach `handler`: 1 when the screener
+   sits right on his path between him and the ball, 0 when it's nowhere near. Feeds
+   the switch decision — a defender who's stuck on the pick is more willing to switch
+   than fight over it. */
+function screenContact(navDef: Player, handler: Player, screener: Player): number {
+  const abx = handler.x - navDef.x,
+    aby = handler.y - navDef.y;
+  const abLen2 = abx * abx + aby * aby || 1;
+  let t = ((screener.x - navDef.x) * abx + (screener.y - navDef.y) * aby) / abLen2;
+  if (t <= 0.1 || t >= 0.95) return 0; // screener not between defender and ball
+  t = clamp(t, 0, 1);
+  const perp = Math.hypot(screener.x - (navDef.x + t * abx), screener.y - (navDef.y + t * aby));
+  return clamp(1 - perp / SCREEN_CONTACT_PERP, 0, 1);
+}
+
+/* One defender's willingness to TAKE a switch — i.e. to pick up `newMan`. Positive
+   = willing. Falls with the size/speed the new man has on him (the mismatch he'd
+   inherit), rises when he's squarely screened and with his IQ. A coach switch lever
+   will add a term here later. */
+function switchWill(d: Player, newMan: Player, contact: number): number {
+  const sizeGap = Math.max(0, newMan.attr.height - d.attr.height);
+  const speedGap = Math.max(0, newMan.attr.speed - d.attr.speed);
+  return (
+    SWITCH_BASE +
+    contact * SWITCH_CONTACT_W +
+    (d.attr.iq - 60) * SWITCH_IQ_W -
+    sizeGap * SWITCH_SIZE_W -
+    speedGap * SWITCH_SPEED_W
+  );
+}
+
+/* Per-screen coverage decision, shared by DECIDE (for targets) and RESOLVE (for the
+   assign swap) so they never diverge. Under a switch scheme the two defenders each
+   decide whether to take the switch (switchWill); it happens only on mutual
+   agreement, else they drop. drop/hedge schemes are unchanged. */
+export type ScreenCoverage = "switch" | "drop" | "hedge";
+export function decideScreenCoverage(
+  ballD: Player,
+  scrD: Player,
+  ball: Player,
+  scr: Player,
+  tac: Tactics,
+): ScreenCoverage {
+  if (tac.pnr === "hedge") return "hedge";
+  if (tac.pnr === "drop") return "drop";
+  // switch scheme: each defender weighs the matchup he'd inherit + how he was screened
+  const contact = screenContact(ballD, ball, scr);
+  const ballDWill = switchWill(ballD, scr, contact); // ballD would pick up the screener
+  const scrDWill = switchWill(scrD, ball, contact); // scrD would pick up the handler
+  return ballDWill > 0 && scrDWill > 0 ? "switch" : "drop";
+}
 const SAG_MAX = 4.0; // ft of extra cushion the on-ball defender gives a zero-perimeter-threat handler
 const SAG_MIN_DEPTH = 10; // ft from rim: no sag at the rim, full sag fades in beyond this
 const SAG_DEPTH_RANGE = 12; // ft over which the outside-the-rim sag fades to full
 const SAG_SPEED_PIVOT = 70; // defender speed below which he sags a bit more (can't pressure safely)
 const SAG_SLOW_MAX = 1.5; // ft of extra cushion for a very slow on-ball defender
+// PnR switch is decided PER DEFENDER (not a central matchup rule): under a switch
+// scheme each of the two defenders independently weighs taking the switch from the
+// matchup it would inherit, how squarely it was screened, and its IQ. A switch
+// happens only when BOTH choose it (clean coordination; modelled miscommunication
+// is a later step). A coach "switchability" lever will later add to switchWill.
+const SWITCH_BASE = 0.6; // baseline willingness to switch a screen
+const SWITCH_SIZE_W = 5.0; // willingness lost per foot of height the inherited man has on the defender
+const SWITCH_SPEED_W = 0.06; // willingness lost per point of speed the inherited man has on the defender
+const SWITCH_CONTACT_W = 0.7; // willingness gained when squarely screened (fighting over is futile)
+const SWITCH_IQ_W = 0.012; // per IQ point above 60 (smarter defenders read/commit the switch)
+const SCREEN_CONTACT_PERP = 3.2; // ft: screener within this of the defender's path counts as contact
 
 /* ---------- DEFENSE DECIDE (pipeline) ----------
    Pure mirror of defenseMove(): one DecidedIntent per defender encoding the SAME
@@ -290,17 +353,16 @@ export function decideDefense(s: Snapshot): DecidedIntent[] {
     const ballD = def.find((d) => d.assign === ball);
     const scrD = def.find((d) => d.assign === scr);
     if (ballD && scrD && ballD !== scrD) {
-      if (tac.pnr === "switch") {
-        // switchOnto writes no target; it only overrides a prior target intent on
-        // ballD if defenseMove would have left ballD's target untouched this tick.
-        // defenseMove's switch branch does NOT write ballD.target, so any earlier
-        // target intent on ballD (man/closeout/help) would still be the live
-        // target. Preserve that: only emit switchOnto when ballD has no other
-        // target intent yet. (scrD likewise keeps its own target intent.)
+      const cover = decideScreenCoverage(ballD, scrD, ball, scr, tac);
+      if (cover === "switch") {
+        // both defenders chose to switch. switchOnto writes no target — ballD keeps
+        // guarding the handler this tick (man target from the loop above); the assign
+        // swap + pnrSwitched flag are RESOLVE effects (gated by the same decision).
         if (!intentFor.has(ballD)) {
           intentFor.set(ballD, { kind: "switchOnto", manNum: scr.num });
         }
-      } else if (tac.pnr === "drop") {
+      } else if (cover === "drop") {
+        // the screener's defender drops to wall the rim, the ball defender trails.
         intentFor.set(scrD, {
           kind: "contest",
           manNum: scr.num,
@@ -311,7 +373,8 @@ export function decideDefense(s: Snapshot): DecidedIntent[] {
           manNum: ball.num,
           to: { x: ball.x + (scr.x - ball.x) * 0.3, y: ball.y + (scr.y - ball.y) * 0.3 },
         });
-      } else if (tac.pnr === "hedge") {
+      } else {
+        // hedge
         intentFor.set(scrD, { kind: "contest", manNum: scr.num, to: { x: ball.x, y: ball.y } });
         // ball.vx/vy *= 0.85 → RESOLVE effect (does not change scrD's target).
       }

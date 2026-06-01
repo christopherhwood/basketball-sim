@@ -2,7 +2,7 @@ import { G, offTeam, defTeam, hoop } from "../core/state.js";
 import { dist, clamp, chance } from "../core/math.js";
 import { effectiveTendencies } from "./tendency.js";
 import { maxSpeed } from "./movement.js";
-import { offBallDefensiveTarget, HELP_RECOGNITION_BASE } from "./defense.js";
+import { offBallDefensiveTarget, decideScreenCoverage, HELP_RECOGNITION_BASE } from "./defense.js";
 import type { Snapshot } from "./snapshot.js";
 import type { DecidedIntent } from "./intent.js";
 import type { Player } from "../types.js";
@@ -100,13 +100,15 @@ export function resolveDefense(intents: DecidedIntent[], s: Snapshot): void {
     const ballD = def.find((d) => d.assign === ball);
     const scrD = def.find((d) => d.assign === scr);
     if (ballD && scrD && ballD !== scrD) {
-      if (tac.pnr === "switch") {
+      const cover = decideScreenCoverage(ballD, scrD, ball, scr, tac);
+      if (cover === "switch") {
+        // both defenders chose the switch (same decision decideDefense made) — swap.
         if (!G.pnrSwitched) {
           ballD.assign = scr;
           scrD.assign = ball;
           G.pnrSwitched = true;
         }
-      } else if (tac.pnr === "hedge") {
+      } else if (cover === "hedge") {
         // hedge slows the handler (drop/hedge target points came through as intents)
         ball.vx *= 0.85;
         ball.vy *= 0.85;
