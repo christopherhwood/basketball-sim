@@ -142,6 +142,10 @@ export type Player = {
   // off the ball (pnr-roll, post, cut, laneclear, ...). Logged on a 3-second call
   // so we can see WHICH behavior left him camped in the lane. No gameplay effect.
   dbgIntent?: string;
+  // decide-pipeline: per-player re-decide counter (ticks until next decision) and
+  // the carried-over intent from the last decision. See docs/decide-pipeline-design.md.
+  decideCD?: number;
+  lastIntent?: import("./sim/intent.js").Intent;
 };
 
 export type ShotMeta = {
