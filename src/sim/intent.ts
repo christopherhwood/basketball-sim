@@ -72,43 +72,38 @@ export interface DecidedIntent {
   intent: Intent;
 }
 
-/* ---------- OFF-BALL DECIDED INTENT ----------
-   The pure off-ball decider's per-mover output. Unlike the simple `spaceTo`/`cut`/
-   `screen` intents above (which describe a single chosen action), an off-ball
-   mover's decision is a CURRENT deterministic target PLUS the eligibility of every
-   rng transition it might take this tick. DECIDE evaluates each transition's
-   geometric/role/clock GATE (no `chance(...)` roll); RESOLVE advances the `ob`
-   state machine and rolls the eligible transitions in fixed per-mover order,
-   overriding `to` with the transition target on a hit. Encoding eligibility (not
-   the roll) is what keeps DECIDE pure and rng-free. See
-   docs/decide-pipeline-design.md and resolveOffBall.
+/* ---------- OFF-BALL CANDIDATE + DECIDED INTENT ----------
+   Off-ball offense is a per-tick UTILITY decider, mirroring the ball-handler's
+   decide(score)→resolve(noise+select+execute) split — NOT an rng-gated state
+   machine. For each FREE (not mid-commitment) non-handler mover, DECIDE SCORES a
+   set of candidate actions (holdSpace / cut / screen / lift) off the snapshot,
+   each modulated by effectiveTendencies, and returns them. RESOLVE adds decision
+   NOISE to the utilities, picks the best, and COMMITS it (sets ob.state, resets
+   ob.t, applies the target). A mover MID-COMMITMENT (in cut/screen/fill and not
+   expired) is NOT re-scored — it continues its action (hysteresis: prevents
+   per-tick jitter). All rng (the noise) lives in RESOLVE, consumed in fixed
+   per-mover order, so the seeded stream stays a port spec. See
+   docs/decide-pipeline-design.md and resolveOffBall. */
 
-   `to` is the applied target if NO transition fires (the spacing/fill/cut/screen
-   target computed in the reserved-set pass). Each `*Elig` flag is the pre-roll gate
-   for a transition; the matching `*To`/`cutY` carry that transition's target so
-   RESOLVE can apply it without re-deriving geometry. */
+export type OffBallActionKind = "holdSpace" | "cut" | "screen" | "lift";
+
+export interface OffBallCandidate {
+  kind: OffBallActionKind;
+  util: number; // pre-noise utility (effectiveTendencies-modulated)
+  to: Point; // target point this action steers toward
+  cutY?: number; // rim-cut lane y (cut only)
+  screenTo?: Point; // screen-set point (screen only)
+}
+
 export interface OffBallDecision {
   who: Player;
-  // applied target for the current state if no rng transition fires
+  // applied target for the current state (committed continuation OR holdSpace base)
   to: Point;
-  // give-and-go cut (the passer cuts to the rim right after passing)
-  giveGoElig: boolean;
-  // backdoor cut vs tight ball-side denial
-  backdoorElig: boolean;
-  cutY: number; // rim-cut lane y used by give-and-go / backdoor / basket-cut
-  // weak-side lift/fill into open space the moment the ball moves
-  liftElig: boolean;
-  liftTo: Point;
-  // call/set an off-ball screen on the on-ball defender
-  screenElig: boolean;
-  screenTo: Point;
-  // ball-reactive basket cut (base rate scaled by driveRim + bonuses)
-  cutElig: boolean;
-  cutChance: number; // post-gate probability RESOLVE rolls for the basket cut
-  giveGoChance: number; // post-gate probability RESOLVE rolls for give-and-go
-  backdoorChance: number; // post-gate probability RESOLVE rolls for the backdoor cut
-  // deterministic state-machine markers (which legacy branch decide took) so
-  // RESOLVE applies the ob.t / relocatedForDrive side-effects without re-deriving.
+  // scored candidates a FREE mover chooses among (empty when mid-commitment).
+  candidates: OffBallCandidate[];
+  committed: boolean; // mover is mid-commitment this tick → continue, do NOT re-score
+  // deterministic state-machine markers (which commitment branch decide took) so
+  // RESOLVE advances the ob.t / relocatedForDrive lifecycle without re-deriving.
   cutState: boolean; // mover is already in "cut" this tick
   fillState: boolean; // mover is already in "fill"
   screenState: boolean; // mover is already in "screen"
