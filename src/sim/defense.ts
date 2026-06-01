@@ -2,7 +2,7 @@ import { G, offTeam, defTeam, hoop } from "../core/state.js";
 import { dist, clamp, lerp } from "../core/math.js";
 import { rules } from "../core/rules.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
-import type { Player, Point, Tactics } from "../types.js";
+import type { Player, Point, Tactics, Tendencies } from "../types.js";
 import type { Snapshot } from "./snapshot.js";
 import type { DecidedIntent, Intent } from "./intent.js";
 
@@ -14,10 +14,6 @@ const DEF_LANE_LOW_IQ_EXTRA_T = 1.0;
 const OFFBALL_TRACK_LAG_MAX = 4.8;
 const OFFBALL_TRACK_SPEED_START = 2.5;
 const OFFBALL_TRACK_SPEED_RANGE = 11;
-// Base chance an off-ball defender recognizes a beaten drive and rotates to help.
-// IQ, interior defense, and help-defense instinct add to it; poor defenders miss
-// the rotation more often. Calibrated so team PPP stays realistic (~1.21).
-export const HELP_RECOGNITION_BASE = 0.4;
 // Closeout rotation: when the ball-handler has no defender within this distance,
 // the nearest defender sprints to close out, stopping CLOSEOUT_GAP ft ball-side.
 const CLOSEOUT_OPEN_DIST = 7;
@@ -156,6 +152,156 @@ const SAG_MIN_DEPTH = 10; // ft from rim: no sag at the rim, full sag fades in b
 const SAG_DEPTH_RANGE = 12; // ft over which the outside-the-rim sag fades to full
 const SAG_SPEED_PIVOT = 70; // defender speed below which he sags a bit more (can't pressure safely)
 const SAG_SLOW_MAX = 1.5; // ft of extra cushion for a very slow on-ball defender
+
+/* ---------- ON-BALL STANCE: pressure vs contain (per-defender utility) ----------
+   The on-ball defender CHOOSES his stance instead of always running the fixed sag
+   formula: pressure (crowd the handler, take away the shot/drive) vs contain (sag,
+   wall the drive, concede the jumper). The chosen stance is a small multiplicative
+   DEVIATION (onBallSagScale) on the EXISTING sag cushion — the geometry is unchanged,
+   only HOW MUCH sag is applied is now a decision. The base formula already trades sag
+   against the handler's perimeter threat, so the deviation is EXACTLY 1.0 at neutral
+   coaching & matchup (the well-tuned cushion is preserved when no lever is set):
+     pressure (scale < 1): aggressive (gambleSteal) coaching, a LATE shot clock (force
+         a tough shot), or a handler I'm quicker than → crowd him.
+     contain  (scale > 1): help-lean (helpDefense) coaching, or a quicker handler I
+         can't safely crowd (speed/handle edge over me) → wall the drive.
+   Pure & deterministic; reads only frozen state. */
+const PRESS_GAMBLE_W = 0.12; // per (gambleSteal factor - 1): aggressive coaching presses
+const CONTAIN_HELP_W = 0.12; // per (helpDefense factor - 1): help-lean coaching contains
+const PRESS_LATECLOCK_W = 0.1; // pressure added as the shot clock winds down
+const PRESS_LATECLOCK_T = 7; // shot clock at/under which the late-clock press is full
+const CONTAIN_QUICK_W = 0.006; // per point the handler's (speed+handle) edge over the defender
+const SAG_SCALE_MIN = 0.65; // tightest pressure cushion (× the formula sag)
+const SAG_SCALE_MAX = 1.4; // deepest contain cushion
+const SAG_SCALE_NEUTRAL = 1.0; // neutral center: the tuned formula cushion untouched
+
+function quicknessEdge(handler: Player, d: Player): number {
+  return handler.attr.speed - d.attr.speed + (handleOf(handler) - d.attr.perimD) * 0.6;
+}
+
+function handleOf(p: Player): number {
+  return Math.max(p.attr.handleLeft, p.attr.handleRight);
+}
+
+/* Multiplier on the EXISTING sag cushion: 1.0 = the tuned formula untouched; <1 =
+   pressure (crowd), >1 = contain (sag). Zero deviation at neutral coaching & matchup
+   so the calibrated geometry is preserved; coaching and a clear quickness edge move
+   it. Pure (no rng), snapshot-safe. */
+function onBallSagScale(handler: Player, d: Player, shotClock: number, eff: Tendencies): number {
+  const gambleDev = tendencyFactor(eff.gambleSteal) - 1; // >0 gamble, <0 safe
+  const helpDev = tendencyFactor(eff.helpDefense) - 1; // >0 help-lean
+  const lateClock = clamp((PRESS_LATECLOCK_T + 4 - shotClock) / (PRESS_LATECLOCK_T + 4), 0, 1);
+  // quickness term is SYMMETRIC: a quicker handler → contain (looser), a slower one →
+  // press (tighter). Symmetric so it does not bias the AVERAGE cushion looser (which
+  // would soften neutral D); it only redistributes pressure by matchup.
+  const press = PRESS_GAMBLE_W * gambleDev + PRESS_LATECLOCK_W * lateClock;
+  const contain = CONTAIN_HELP_W * helpDev + CONTAIN_QUICK_W * quicknessEdge(handler, d);
+  return clamp(SAG_SCALE_NEUTRAL - press + contain, SAG_SCALE_MIN, SAG_SCALE_MAX);
+}
+
+/* ---------- OFF-BALL STANCE: deny vs sag (per-defender utility) ----------
+   Each off-ball defender CHOOSES how to play the passing lane to his man instead of
+   always sitting "on the line, up the line". He scores `deny` (overplay the lane to
+   a dangerous man, shade ball-side) vs `sag` (drop toward the lane/help, shade
+   help-side). The chosen stance SHIFTS the existing offBallDefensiveTarget along the
+   man→ball vs man→hoop axis via a -1..+1 `denyBias`: +1 = more ball-side/up-the-line
+   (deny), -1 = more help-side/rim (sag). 0 reproduces the original target.
+
+   Utility drivers:
+   - threat(man) → deny a dangerous shooter's catch; sag off a non-threat
+   - relevance to the ball (closer man / one pass away) → deny; far weak-side → sag
+   - coaching: aggression (gambleSteal) → deny; help-lean (helpDefense) → sag. */
+// The off-ball target ("on the line, up the line") is itself well-tuned (it already
+// folds in man-threat via its `gap`), so the stance is expressed as a DEVIATION that
+// is ZERO at neutral coaching — the base geometry is preserved exactly when no coach
+// lever is set, which is what keeps neutral PPP on its calibrated mark. The lever:
+//   deny (+): aggressive (gambleSteal) coaching overplays the lane to a man who is
+//             ALSO a real threat near the ball (the extra-threat term only ADDS to an
+//             already-aggressive read, so it can't perturb the neutral baseline).
+//   sag  (-): help-lean (helpDefense) coaching drops toward the lane/help.
+const DENY_GAMBLE_W = 1.0; // per (gambleSteal factor - 1): aggressive coaching denies
+const SAG_HELP_W = 1.0; // per (helpDefense factor - 1): help-lean coaching sags
+// A dangerous man near the ball amplifies an ALREADY-aggressive deny (gated on the
+// coaching deviation so it is exactly 0 at neutral): you really jump the lane of a
+// shooter one pass away when your coach has you gambling.
+const DENY_THREAT_AMP = 1.0; // multiplier on the deny term per (threat near the ball)
+const DENY_NEAR_DIST = 20; // ft man-to-ball over which "near the ball" fades to 0
+// Feet of positional shift at full deny / full sag — modest nudges (a step into the
+// lane, not a relocation). The sag step is small so weak-side men don't vacate the
+// passing lanes (which would suppress lane steals and lift pace).
+const DENY_SHIFT_FT = 2.2; // step toward the man→ball line (more ball-side)
+const SAG_SHIFT_FT = 1.6; // step toward the man→hoop line (more help-side / rim)
+
+function offBallDenyBias(d: Player, m: Player, ballPt: Point, eff: Tendencies): number {
+  const gambleDev = tendencyFactor(eff.gambleSteal) - 1; // >0 gamble, <0 safe
+  const helpDev = tendencyFactor(eff.helpDefense) - 1; // >0 help-lean, <0 stay-home
+  const manToBall = Math.hypot(ballPt.x - m.x, ballPt.y - m.y);
+  const nearBall = clamp(1 - manToBall / DENY_NEAR_DIST, 0, 1);
+  // deny grows with gamble coaching, amplified by a dangerous man near the ball
+  const denyU = Math.max(0, gambleDev) * DENY_GAMBLE_W * (1 + DENY_THREAT_AMP * threat(m) * nearBall);
+  // sag grows with help-lean coaching; safe coaching (gambleDev<0) also drops a touch
+  const sagU = Math.max(0, helpDev) * SAG_HELP_W + Math.max(0, -gambleDev) * DENY_GAMBLE_W;
+  return Math.tanh((denyU - sagU) * 1.2);
+}
+
+/* Shift the neutral off-ball target toward the lane (deny) or toward help (sag).
+   bias>0 → step toward man→ball; bias<0 → step toward man→hoop. */
+function shiftOffBallTarget(base: Point, m: Player, ballPt: Point, h: Point, bias: number): Point {
+  if (bias > 0) {
+    const len = Math.hypot(ballPt.x - m.x, ballPt.y - m.y) || 1;
+    const f = bias * DENY_SHIFT_FT;
+    return { x: base.x + ((ballPt.x - m.x) / len) * f, y: base.y + ((ballPt.y - m.y) / len) * f };
+  }
+  const len = Math.hypot(h.x - m.x, h.y - m.y) || 1;
+  const f = -bias * SAG_SHIFT_FT;
+  return { x: base.x + ((h.x - m.x) / len) * f, y: base.y + ((h.y - m.y) / len) * f };
+}
+
+/* ---------- HELP STANCE: rotate vs stay (per-defender utility) ----------
+   Replaces the resolve-side `chance(rec)` recognition gamble with a per-defender
+   UTILITY decision. When the deterministic gates pass (live drive, near the rim,
+   driver has BEATEN his man, a help defender is in range), DECIDE emits the `help`
+   intent; RESOLVE turns the helper's utility into a rotate-vs-stayhome decision,
+   committed ONCE per drive via the helpCommit memo.
+
+   The utility is a rotation PROPENSITY in [0,1] (the helper's utility-weighted
+   willingness to rotate). RESOLVE commits it with a single uniform draw (chance) —
+   the draw IS the decision noise, and keeping it a one-draw roll preserves the rng
+   shape the old gamble used so the neutral baseline is unchanged.
+
+   Utility drivers:
+   - my help-defense instinct (helpDefense tendency + IQ + interior D) → rotate
+   - I'm the nearest/lowest help defender → rotate (handled by helper selection)
+   - threat of the man I'd LEAVE → stay (don't help off a great shooter)
+   - coaching: the helpDefense lever is folded into the tendency.
+   The instinct terms match the OLD recognition formula (so neutral is preserved);
+   the leave-threat term is the genuinely NEW signal (the old code ignored who you
+   left). */
+const HELP_PROPENSITY_BASE = 0.4; // == old HELP_RECOGNITION_BASE (neutral rotation propensity)
+const HELP_IQ_W = 1 / 110; // per IQ point above 60 (matches old rec)
+const HELP_INTD_W = 1 / 170; // per interior-D point above 60 (matches old rec)
+const HELP_HELP_TEND_W = 1 / 130; // per helpDefense point above 50 (matches old rec → coaching lever)
+// The threat of the man the helper would LEAVE pulls his rotation propensity down —
+// you do not help off a knock-down shooter (the NEW signal this conversion adds).
+// Currently 0: even a small weight measurably LIFTS neutral PPP (helpers decline the
+// most valuable kick-out drives, opening rim attacks), which breaks the PPP guardrail.
+// Left wired so a future pass can re-enable it once the rim-help loss is offset.
+const HELP_LEAVE_THREAT_W = 0.0; // per unit threat of the man left open → stay home (NEW; see note)
+const HELP_PROP_MIN = 0.04;
+const HELP_PROP_MAX = 0.95;
+
+/* The helper's rotate-vs-stayhome UTILITY, expressed as a commit PROBABILITY in
+   [0,1]. RESOLVE rolls it once per drive (single uniform draw → helpCommit memo). */
+export function helpRotateUtil(helper: Player, eff: Tendencies): number {
+  const leave = helper.assign ? threat(helper.assign) : 0;
+  const propensity =
+    HELP_PROPENSITY_BASE +
+    (helper.attr.iq - 60) * HELP_IQ_W +
+    (helper.attr.interiorD - 60) * HELP_INTD_W +
+    (eff.helpDefense - 50) * HELP_HELP_TEND_W -
+    HELP_LEAVE_THREAT_W * leave;
+  return clamp(propensity, HELP_PROP_MIN, HELP_PROP_MAX);
+}
 // PnR switch is decided PER DEFENDER (not a central matchup rule): under a switch
 // scheme each of the two defenders independently weighs taking the switch from the
 // matchup it would inherit, how squarely it was screened, and its IQ. A switch
@@ -235,19 +381,26 @@ export function decideDefense(s: Snapshot): DecidedIntent[] {
       const depth = dist(m, h);
       const outside = clamp((depth - SAG_MIN_DEPTH) / SAG_DEPTH_RANGE, 0, 1);
       const slow = clamp((SAG_SPEED_PIVOT - d.attr.speed) / 40, 0, 1) * SAG_SLOW_MAX;
-      const sagDist = (SAG_MAX * (1 - perimeterThreat(m)) + slow) * outside;
+      // STANCE CHOICE: scale the formula's sag by the pressure-vs-contain decision.
+      const sagScale = onBallSagScale(m, d, s.shotClock, effectiveTendencies(d));
+      const sagDist = (SAG_MAX * (1 - perimeterThreat(m)) + slow) * outside * sagScale;
       const cushion = presDist * 0.5 + sagDist;
       const to: Point = { x: predX - (dx / dd) * cushion, y: predY - (dy / dd) * cushion };
       intentFor.set(d, { kind: "contest", manNum: m.num, to });
     } else {
-      // off-ball: "on the line, up the line", or clear the lane on a 3s warning
-      const to: Point = shouldClearDefensiveLane(d, off, h)
-        ? (() => {
-            const side = d.y < 25 ? -1 : 1;
-            const dir = G.attackHoop === "R" ? -1 : 1;
-            return { x: h.x + dir * 15, y: side < 0 ? 14 : 36 };
-          })()
-        : offBallDefensiveTarget(d, m, h);
+      // off-ball: "on the line, up the line", shifted by the deny-vs-sag STANCE
+      // choice, or clear the lane on a 3s warning (lane-clear overrides the stance).
+      let to: Point;
+      if (shouldClearDefensiveLane(d, off, h)) {
+        const side = d.y < 25 ? -1 : 1;
+        const dir = G.attackHoop === "R" ? -1 : 1;
+        to = { x: h.x + dir * 15, y: side < 0 ? 14 : 36 };
+      } else {
+        const base = offBallDefensiveTarget(d, m, h);
+        const ballPt = { x: G.ball.x, y: G.ball.y };
+        const bias = offBallDenyBias(d, m, ballPt, effectiveTendencies(d));
+        to = shiftOffBallTarget(base, m, ballPt, h, bias);
+      }
       intentFor.set(d, { kind: "contest", manNum: m.num, to });
     }
   }
@@ -312,8 +465,13 @@ export function decideDefense(s: Snapshot): DecidedIntent[] {
       // GATE 2 (recognition / helpCommit === "in") is the rng gamble → RESOLVE.
       // GATE (range): the wall-up target is geometrically defined regardless; we
       // emit the help intent when the helper is within helpRadius (deterministic).
-      const hf = tendencyFactor(effectiveTendencies(helper).helpDefense);
+      const eff = effectiveTendencies(helper);
+      const hf = tendencyFactor(eff.helpDefense);
       const helpRadius = 14 * hf;
+      // DECIDE emits the help intent whenever the DETERMINISTIC gates pass (in range
+      // here). The rotate-vs-stayhome STANCE choice (utility + noise + per-drive
+      // commit memo) is made in RESOLVE — keeping the single commit point and all rng
+      // in one phase, exactly like the old chance(rec) gamble it replaces.
       if (hd < helpRadius) {
         const bspeed = Math.hypot(ball.vx, ball.vy);
         const distToHoop = dist(ball, h) || 1;
