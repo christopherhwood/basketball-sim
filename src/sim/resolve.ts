@@ -1,8 +1,12 @@
 import { G, offTeam, defTeam, hoop } from "../core/state.js";
-import { dist, clamp, chance } from "../core/math.js";
+import { dist, chance } from "../core/math.js";
 import { effectiveTendencies } from "./tendency.js";
 import { maxSpeed } from "./movement.js";
-import { offBallDefensiveTarget, decideScreenCoverage, HELP_RECOGNITION_BASE } from "./defense.js";
+import {
+  offBallDefensiveTarget,
+  decideScreenCoverage,
+  helpRotateUtil,
+} from "./defense.js";
 import type { Snapshot } from "./snapshot.js";
 import type { DecidedIntent } from "./intent.js";
 import type { Player } from "../types.js";
@@ -50,18 +54,15 @@ export function resolveDefense(intents: DecidedIntent[], s: Snapshot): void {
     if (helpDI && helpDI.intent.kind === "help") {
       const helper = helpDI.who;
       const to = helpDI.intent.to;
-      // GATE 2 (recognition): decide ONCE per drive whether this helper rotates.
+      // STANCE DECISION (per drive, by utility — replaces the old chance(rec) gamble):
+      // rotate vs stayhome from the helper's instinct (tendency + IQ + interior D) and
+      // the threat of the man he'd leave. helpRotateUtil returns a [0,1] commit
+      // PROBABILITY (the utility-weighted willingness); the single uniform draw IS the
+      // decision noise, keeping the one-draw rng shape the old gamble used. Committed
+      // ONCE per drive via the helpCommit memo, the first defensive rng draw.
       if (helper.helpCommit == null) {
         const eff = effectiveTendencies(helper);
-        const rec = clamp(
-          HELP_RECOGNITION_BASE +
-            (helper.attr.iq - 60) / 110 +
-            (helper.attr.interiorD - 60) / 170 +
-            (eff.helpDefense - 50) / 130,
-          0.04,
-          0.95,
-        );
-        helper.helpCommit = chance(rec) ? "in" : "out";
+        helper.helpCommit = chance(helpRotateUtil(helper, eff)) ? "in" : "out";
       }
       if (helper.helpCommit === "in") {
         helper.target = to; // wall up
