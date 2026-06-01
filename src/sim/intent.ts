@@ -1,5 +1,37 @@
 import type { Player, Point, ShotType } from "../types.js";
 
+/* ---------- BallDecision ----------
+   The on-ball decider's PURE output. Unlike the off-ball intents, the ball
+   handler's choice cannot be reduced to a single pre-noise pick in DECIDE: the
+   legacy code adds randn()*noise to each utility BEFORE selecting (so both the
+   winner AND hold-eligibility are post-noise), and that rng must live in RESOLVE.
+   So DECIDE returns the four SCORED (pre-noise) utilities plus everything RESOLVE
+   needs to add noise, pick the winner, run the drive-cutoff rolls, and execute.
+   See docs/decide-pipeline-design.md and the RESOLVE SPEC. */
+export interface BallDecision {
+  who: Player;
+  // pre-noise utilities
+  shootU: number;
+  driveU: number;
+  passU: number;
+  postU: number;
+  // shot/contest context (for an executed shoot)
+  type: ShotType;
+  contest: number;
+  mp: number;
+  pts: number;
+  open: number;
+  dh: number; // distance handler -> hoop
+  // pass context
+  bestPass: Player | null;
+  bestPU: number;
+  // post context
+  postDef: Player | null;
+  postEdge: number;
+  // drive target point (lerp toward the hoop)
+  toward: Point;
+}
+
 /* ---------- INTENTS ----------
    A decision is a VALUE, not a side effect. Each player's decider returns one
    Intent per tick; RESOLVE executes it (and is the only phase allowed to mutate
