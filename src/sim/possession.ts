@@ -4,7 +4,9 @@ import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll, moveTeam } from "./movement.js";
 import { offenseDecide, isInsidePlayer } from "./offense.js";
-import { defenseMove } from "./defense.js";
+import { decideDefense } from "./defense.js";
+import { sense } from "./snapshot.js";
+import { resolveDefense } from "./resolve.js";
 import { resolveShot, updateFreeThrows } from "./resolution.js";
 import { updateTransition, beginScoreTransition } from "./transition.js";
 import { enforceThreeSeconds, resetThreeSecondTimers } from "./threeSeconds.js";
@@ -266,9 +268,13 @@ export function tick(): void {
   }
 
   // Offense integrates first so defense reads up-to-date offensive positions
-  // this tick (eliminates the built-in 0.1 s lag).
+  // this tick (eliminates the built-in 0.1 s lag). Defense now runs through the
+  // decide pipeline: SENSE the (post-offense-move) world, DECIDE per-defender
+  // intents, RESOLVE applies targets + the deferred help-recognition rng / PnR
+  // switch / hedge. See docs/decide-pipeline-design.md.
   moveTeam(offTeam());
-  defenseMove();
+  const defSnap = sense();
+  resolveDefense(decideDefense(defSnap), defSnap);
   moveTeam(defTeam());
   // ball follows holder after everyone has moved
   if (G.ball.state === "held" && G.ball.holder) {
