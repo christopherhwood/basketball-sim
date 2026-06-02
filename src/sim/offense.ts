@@ -147,13 +147,17 @@ const DRIVE_LAG_BONUS = 0.55; // flat bonus when the on-ball defender is trackin
 const DRIVE_LAG_DIST_THRESHOLD = 3.5; // ft: defender is "lagging" if his target is this far from handler
 const DRIVE_TIGHT_HANDLE_FLOOR = 58; // handle threshold below which a tight defender suppresses drives
 const DRIVE_TIGHT_BONUS = 0.35; // bonus when the handler can beat a tight defender (handle above floor)
-const DRIVE_SCREEN_BONUS = 0.45; // extra drive utility off a PnR screen (coming off the pick)
+// Small residual nudge to attack OFF a SET pick (commit to the action). Reduced
+// from 0.45: the on-ball defender is now PHYSICALLY hung up on the screen body, so
+// the real separation — not this bonus — supplies the advantage. Gated on the
+// screen actually being SET, not mere proximity.
+const DRIVE_SCREEN_BONUS = 1.6; // "attack off the pick" downhill bias on a SET screen
 const DRIVE_BASE_DIST_MIN = 6; // handler must be outside this range from the hoop to drive
 const DRIVE_CONTINUATION_BONUS = 0.22; // extra drive utility when already mid-drive (keep attacking)
 
 // Open-lane check: no defender in the corridor between handler and rim
 const OPEN_LANE_CORRIDOR_WIDTH = 4.5; // ft half-width of the lane corridor
-const OPEN_LANE_BONUS = 2.0; // drive-utility bonus when the lane is clear
+const OPEN_LANE_BONUS = 2.8; // drive-utility bonus when the lane is clear
 const OPEN_LANE_MIN_DIST = 8; // only meaningful when handler is this far from the hoop
 
 // Drive-and-kick: when help defense commits to a drive, pass to the open man
@@ -270,6 +274,11 @@ const POP_RATING_SLOPE = 0.05; // per point of three rating above the pivot
 const POP_TEND_SLOPE = 0.02; // per point of shootThree above the pop tendency floor
 const POP_OPEN_BONUS = 0.5; // pop is more attractive when the pop spot is uncontested
 const ROLL_BASE_UTIL = 1.0; // baseline roll attraction (the dive is the default action)
+// Pocket pass to the rolling screener: the PnR's primary rim read. Feed him when
+// his dive is open and he's diving toward the rim (the authentic way drop coverage
+// is punished — the on-ball stays home, the big can't be in two places).
+const ROLL_FEED_RANGE = 14; // ft from rim within which a rolling screener is a rim feed
+const ROLL_FEED_BONUS = 2.0; // pass-utility bonus for a feed to an open roller (×openness)
 const POP_OPEN_RADIUS = 6; // ft: a defender within this of the pop spot makes it contested
 
 // Inside home spots (relative to the attacking hoop), assigned to bigs so they
@@ -313,8 +322,11 @@ const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/
 const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
 const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
+// If the handler never USES the pick (resets out), the screen expires after a
+// longer hold and the screener RELOCATES/spaces — it does NOT roll/pop. Roll/pop
+// fires only on a SET screen the handler engaged (ob.screenSet && ob.screenUsed).
+const SCREEN_HOLD_EXPIRE = 2.6; // seconds: an unused set screen gives up and spaces
 const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
-const SCREEN_TRIGGER_DIST = 4; // ft: screener must be within this of the defender to count as set
 // Wait-for-the-pick: a screener heading to the handler's defender but not yet
 // arrived (within this range of the on-ball defender) is "incoming" — the handler
 // holds for it instead of attacking early, unless he already has a strong look.
@@ -385,6 +397,73 @@ const PNR_ACTION_SCALE = 1.0; // baseline under "pnr" (screen prominence handled
 
 const SPACE_DWELL_MIN = 1.5; // seconds a player holds its spot after each relocation before re-evaluating
 const RETARGET_MIN_SHIFT = 2.5; // ft: ignore retarget if new target is closer than this to current
+
+/* ---------- BALL-DRIVEN FORMATION (helios-base model) ----------
+   The off-ball DEFAULT (holdSpace) is no longer "hunt the best open spot" — that
+   re-scored, noisy spot search is what made the four movers wander independently.
+   Instead each mover owns a FIXED base slot (his perimeterSpots/insideSpots home)
+   and his holdSpace target is that slot SHIFTED smoothly by the BALL position. Every
+   home is the same smooth function of one ball position, so when the ball moves all
+   four homes slide together as a unit (coherent, organized) and spacing is preserved.
+   Cuts/screens/backdoor/lift remain UTILITY deviations layered on top — when a
+   trigger fires the player breaks off the formation; otherwise he holds his home.
+
+   The shift is computed from a COARSE (banded) read of the ball position rather
+   than the raw continuous coordinate, so the home is piecewise-constant: it stays
+   put while the ball moves within a band and only jumps when the ball crosses into
+   a new band. This is what keeps the off-ball four CALM (few retargets) while still
+   shifting coherently as a unit when the ball genuinely changes side/depth — the
+   discreteness is the hysteresis the helios dead-zone provides, baked into the home.
+
+   - STRONG-SIDE SLIDE: the ball's y maps to one of three bands (bottom / middle /
+     top). The slot slides toward the ball's band-side by a fixed amount, bounded so
+     the weak side stays occupied (we never collapse everyone onto the ball).
+   - DEPTH ADJUST: the ball's depth maps to two bands (up high vs worked low). High
+     ball → perimeter slots a touch out; low ball → a touch in (passing angle).
+   Deterministic: a pure function of (slot, banded ball, hoop). No rng. */
+const FORM_SLIDE_FT = 2.0; // ft the slot leans toward the ball's strong-side band
+// Wide neutral zone: a handler probing around the top (y≈25) does NOT shift the
+// formation; only a genuine side entry (ball worked to a wing/corner) leans the
+// shape. This is what stops the off-ball four from reshuffling on every perimeter
+// dribble — they hold until the ball really changes side.
+const FORM_BAND_LO = 15; // ball y below this = bottom-side band
+const FORM_BAND_HI = 35; // ball y above this = top-side band
+const FORM_DEPTH_FT = 1.5; // ft the perimeter slot lifts/sinks with the ball depth band
+// Single wide depth boundary (hysteresis-friendly): the ball is "low" once it's
+// driven well inside, else "high". One boundary → at most one depth flip a trip.
+const FORM_DEPTH_HI = 999; // disabled upper band (no separate "extra high" tier)
+const FORM_DEPTH_LO = 13; // ball depth below this = "worked low" (driven inside)
+const FORM_DEADZONE_MIN = 2.5; // ft: floor on the retarget dead-zone (helios uses ballDist*0.1)
+const FORM_DEADZONE_FRAC = 0.1; // ballDist fraction for the dead-zone (helios dist_thr = ballDist*0.1)
+
+/* The ball-driven home for one slot: the slot's base home shifted by a COARSE
+   (banded) read of the ball position. `inside` players (bigs) get a gentler slide
+   and no depth lift (they work the dunker/short-corner band). Because the shift is
+   banded (piecewise-constant in the ball y/depth), the home barely moves while the
+   ball works within a band and every slot uses the SAME band → all four slide
+   together as a unit when the ball changes side/depth (coherent). The dead-zone at
+   the call site holds the target through the small within-band variation. */
+function formationHome(home: Point, ball: Point, h: Point, dir: number, inside: boolean): Point {
+  // STRONG-SIDE SLIDE: ball-side band (−1 bottom / 0 middle / +1 top). The shape
+  // leans ball-side by LIFTING THE WEAK SIDE toward the ball, NOT by crushing the
+  // strong side into the baseline (which would stack a wing onto a corner). So the
+  // slide is scaled by how far the slot sits on the WEAK side of center: a weak-side
+  // slot slides toward the ball; a slot already on the ball side barely moves. This
+  // preserves corner spacing and keeps the four spread while the set leans ball-ward.
+  const ballBand = ball.y < FORM_BAND_LO ? -1 : ball.y > FORM_BAND_HI ? 1 : 0;
+  // (home.y - 25) * (-ballBand) > 0 exactly when the slot is on the WEAK side of
+  // the ball: that slot slides toward the ball; a strong-side slot gets frac≈0.
+  const weakSideFrac = ballBand === 0 ? 0 : clamp((home.y - 25) * -ballBand, 0, 22) / 22;
+  // Bigs barely lean: they work fixed block/dunker spots, so a strong slide would
+  // shift where they crash for boards (it measurably perturbs the mass-rebound
+  // edge). The visible formation coherence comes from the perimeter four.
+  const slide = ballBand * FORM_SLIDE_FT * weakSideFrac * (inside ? 0.2 : 1);
+  // DEPTH ADJUST: two-band depth read; perimeter slots only.
+  const ballDepth = Math.abs(ball.x - h.x);
+  const depthBand = ballDepth > FORM_DEPTH_HI ? 1 : ballDepth < FORM_DEPTH_LO ? -1 : 0;
+  const depthShift = inside ? 0 : depthBand * FORM_DEPTH_FT;
+  return { x: home.x + dir * depthShift, y: clamp(home.y + slide, 3, 47) };
+}
 const TARGET_MIN_PERIMETER_DIST = 12; // classic motion spacing: keep perimeter slots a full gap apart
 const TARGET_MIN_INTERIOR_DIST = 7.5; // interior players can be closer, but not stacked
 const TARGET_MIN_MIXED_DIST = 9.5; // one inside / one perimeter needs a passing lane gap
@@ -549,12 +628,17 @@ export function resolveOffense(
   // hasn't arrived yet, the handler holds for it (a PnR ball-handler doesn't drive
   // off before the screen gets there) — unless he already has a strong look.
   const onBallD = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+  // The handler waits while a teammate is coming to set the pick but it is NOT yet
+  // SET on his defender (ob.screenSet). Once the screen lands physically he stops
+  // waiting and attacks off the real separation. An approaching screener within
+  // WAIT_RANGE also counts as incoming so he holds for it to arrive.
   const screenIncoming =
     !!onBallD &&
     off.some((o) => {
       if (o === bh || o.ob?.state !== "screen") return false;
+      if (o.ob.screenSet) return false; // already set → attack, don't keep waiting
       const dToDef = dist(o, onBallD);
-      return dToDef > SCREEN_TRIGGER_DIST && dToDef < SCREEN_WAIT_RANGE;
+      return dToDef < SCREEN_WAIT_RANGE;
     });
   // Wait only when there's no compelling look anyway (same gate as a normal hold) —
   // a good drive/shot/pass is still taken. The screen just lets the handler keep
@@ -1071,9 +1155,17 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
     }
 
     // --- spacing read (the holdSpace target) ---
-    let tgt: Point = { x: home.x, y: home.y };
+    // BALL-DRIVEN FORMATION: the default home is the mover's FIXED slot shifted
+    // smoothly by the ball position (helios-base getPositions). Every mover's home
+    // is the same smooth function of the ball, so the four slide together as a unit
+    // when the ball moves (coherent, not four independent spot-hunters). Drive
+    // push/lane-clear/dwell below are deviations from this skeleton.
+    const formHome = formationHome(home, { x: bh.x, y: bh.y }, h, dir, inside);
+    let tgt: Point = formHome;
+    let usingFormation = true; // holdSpace base is the ball-driven slot (no spot-hunt)
     if (shouldClearLane(p, h)) {
       tgt = laneClearSpot(p, home, h, dir);
+      usingFormation = false;
     } else if (driving) {
       // PUSH/PULL on the drive (principle 1). One coherent per-player rule:
       //   - a mover on the SAME side as the drive lane, near the rim, PUSHES away
@@ -1086,6 +1178,7 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
       if (onDriveSide && dist(p, h) < DRIVE_PUSH_DEPTH_MAX && !ob.relocatedForDrive && !drivePushUsed) {
         // PUSH: clear to the weak side, away from the drive lane.
         tgt = { x: home.x, y: 50 - home.y };
+        usingFormation = false;
         dec.tookDriveRelocate = true;
         drivePushUsed = true; // single push relocation per drive tick
       } else if (
@@ -1112,6 +1205,7 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
         // later tuned to not over-commit to a corner lift.
         const cornerY = driveSideLow ? 4 : 46;
         tgt = { x: Math.max(home.x, h.x + dir * 22), y: cornerY };
+        usingFormation = false;
         dec.tookDriveRelocate = true;
         drivePullUsed = true;
       } else if (p.target) {
@@ -1136,15 +1230,48 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
       continue;
     }
 
-    // holdSpace target: reserve-aware spacing spot. Only a meaningful shift counts
-    // as a relocation (else keep the prior target so we don't twitch).
-    if (!driving && !shouldClearLane(p, h) && d && dist(d, p) < 7) {
+    // holdSpace target. With the ball-driven formation the default is the mover's
+    // FIXED slot home (no spot-hunt) — only collision/spacing de-overlap nudges it
+    // off the exact slot, so the slot identity stays put and the four slide as a
+    // unit. The lane-clear / drive-relocate deviations keep the legacy reserve-aware
+    // spot search (they intentionally relocate). When pressured ball-side, lean a
+    // touch off the defender (a small live adjustment, not a slot swap).
+    // The holdSpace target is the reserve-aware spacing pick anchored on the
+    // ball-driven formation home (preferred). reserveAwareTarget keeps the proven
+    // spacing separation (and the option fallback that prevents two bigs/leaned
+    // slots from stacking). The COHERENCE/CALM no longer comes from suppressing the
+    // search — it comes from the band HYSTERESIS below: the chosen home is HELD until
+    // the ball crosses into a new band, so it doesn't re-pick every decision.
+    if (usingFormation && !driving && d && dist(d, p) < 7) {
+      // pressured ball-side: lean a touch off the defender (small live adjustment).
+      const away = Math.sign(p.y - d.y) || 1;
+      tgt = { x: tgt.x, y: clamp(tgt.y + away * 3.5, 3, 47) };
+    } else if (!usingFormation && !driving && !shouldClearLane(p, h) && d && dist(d, p) < 7) {
       const away = Math.sign(p.y - d.y) || 1;
       tgt = { x: home.x, y: clamp(home.y + away * 3.5, 3, 47) };
     }
-    const holdTarget = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside);
+    // Anchor the PERIMETER movers to their formation slot (the wandering-spacers the
+    // ball-driven formation targets) so the four hold a coherent shape and don't
+    // hunt the open spot every tick. EXCEPTION: if the slot would CONFLICT with an
+    // already-reserved teammate (within the spacing gap), drop the anchor for this
+    // pick so the reserve search relocates to a clear option instead of pinning two
+    // bodies together — coherence in the common case, spread when it would stack.
+    // Bigs always keep the flexible search (their inside slots can collide).
+    const slotConflicts = reserved.some((r) => dist(tgt, r.point) < spacingMin(inside, r.inside));
+    const anchorSlot = usingFormation && !inside && !slotConflicts;
+    const holdTarget = reserveAwareTarget(p, tgt, spacingOptions, reserved, def, h, inside, anchorSlot);
+    // DEAD-ZONE (helios dist_thr = ballDist * 0.1, floored): only retarget when the
+    // new formation home has moved meaningfully from the current target, so a mover
+    // holds his spot through small ball jitter. Combined with the gentle banded slide
+    // (the home barely moves within a band) and the existing SPACE_DWELL hold, this
+    // keeps movement calm/coherent WITHOUT freezing the offense — the dynamic
+    // relocations that create rim attacks still happen on real ball shifts. (A harder
+    // band-locked hold was tried and measurably suppressed drives/cuts; the dead-zone
+    // is the lighter touch that keeps both coherence and rim pressure.)
     const prior = p.target;
-    const holdShifts = !prior || dist(holdTarget, prior) >= RETARGET_MIN_SHIFT;
+    const ballDist = dist(p, { x: bh.x, y: bh.y });
+    const deadZone = usingFormation ? Math.max(FORM_DEADZONE_MIN, ballDist * FORM_DEADZONE_FRAC) : RETARGET_MIN_SHIFT;
+    const holdShifts = !prior || dist(holdTarget, prior) >= deadZone;
     const holdApplied: Point = holdShifts || !prior ? holdTarget : prior;
     dec.to = holdApplied;
     dec.retarget = holdShifts; // resolve resets ob.t = 0 only on a real relocation
@@ -1199,8 +1326,11 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
       // possession (ob.screenedThisPoss) and after a short bringup beat (possClock)
       // so the screener rolls/pops/spaces after the action instead of re-picking on
       // every reset to "space", and the action doesn't fire at possession start.
+      // ONLY the designated pnr screener sets the on-ball ball screen. The old
+      // generic iq/driveRim path let random off-ball players "screen" then roll/pop;
+      // a coherent PnR has one screener who actually sets a physical pick.
       const isPnrScreener = p === pnrScreener && !ob.screenedThisPoss && G.possClock >= PNR_BRINGUP_DELAY;
-      if (!screenCommitted && !cutCommitted && onBallDef && (isPnrScreener || tend.driveRim > 50 || p.attr.iq > 55)) {
+      if (!screenCommitted && !cutCommitted && onBallDef && isPnrScreener) {
         const hx = bh.x - h.x;
         const hy = bh.y - h.y;
         const hlen = Math.hypot(hx, hy) || 1;
@@ -1358,11 +1488,14 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
           }
           screenCommitted = true;
           const isPnr = p === pnrScreener;
-          // The pnr screener, once the screen has been set (handler drives off it,
-          // or the hold expires), transitions to ROLL or POP by utility — the dive
-          // or the lift that finishes the action. A generic (non-pnr) screener keeps
-          // the legacy cut-off-the-screen / clear-out behavior.
-          if (G.driving) {
+          // Roll/pop fires ONLY when the screen was actually SET (physical contact
+          // with the on-ball defender — ob.screenSet, written by applyScreenContact)
+          // AND the handler ENGAGED it (drove off it / pulled ahead — ob.screenUsed).
+          // No more firing on the bare global G.driving or a bare timer. If the
+          // handler never uses the pick, the screen expires (SCREEN_HOLD_EXPIRE) and
+          // the screener RELOCATES/spaces rather than rolling into nothing.
+          const setAndUsed = !!ob.screenSet && !!ob.screenUsed;
+          if (setAndUsed) {
             if (isPnr) {
               const pop = shouldPop(p, def, h, dir);
               ob.state = pop ? "pop" : "roll";
@@ -1375,17 +1508,11 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
               ob.screenTarget = null;
               cutCommitted = true;
             }
-          } else if (ob.t > SCREEN_HOLD_MAX) {
-            if (isPnr) {
-              const pop = shouldPop(p, def, h, dir);
-              ob.state = pop ? "pop" : "roll";
-              ob.t = 0;
-              ob.screenTarget = null;
-            } else {
-              ob.state = "space";
-              ob.t = 0;
-              ob.screenTarget = null;
-            }
+          } else if (ob.t > SCREEN_HOLD_EXPIRE) {
+            // unused pick: give up the screen and space out (do NOT roll/pop).
+            ob.state = "space";
+            ob.t = 0;
+            ob.screenTarget = null;
           }
         } else {
           ob.state = "space";
@@ -1469,6 +1596,8 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
         ob.t = 0;
         ob.screenTarget = best.screenTo ?? best.to;
         ob.screenedThisPoss = true; // pnr macro-intent re-screen bonus spent for the possession
+        ob.screenSet = false; // physical contact not yet made (applyScreenContact sets it)
+        ob.screenUsed = false; // handler hasn't engaged the pick yet
         p.target = best.to;
         screenCommitted = true;
         continue;
@@ -1587,12 +1716,19 @@ function targetScore(
   def: Player[],
   h: Point,
   inside: boolean,
+  anchor = false,
 ): number {
   const awareness = spacingAwareness(p);
   let nearestDef = 16;
   for (const d of def) nearestDef = Math.min(nearestDef, dist(d, candidate));
 
-  let score = nearestDef * 0.35 - dist(candidate, preferred) * 0.75;
+  // ANCHOR (ball-driven formation): the slot home strongly dominates — the option
+  // set is only a fallback for a genuine spacing conflict, not a per-tick open-spot
+  // hunt. So with anchor on, deviating from the preferred slot is heavily penalized
+  // and openness barely matters; the four hold their slots and slide as a unit.
+  const openW = anchor ? 0.28 : 0.35;
+  const prefW = anchor ? 1.05 : 0.75;
+  let score = nearestDef * openW - dist(candidate, preferred) * prefW;
   score += p.target ? -dist(candidate, p.target) * 0.4 : 0;
   for (const r of reserved) {
     const gap = spacingMin(inside, r.inside);
@@ -1612,12 +1748,13 @@ function reserveAwareTarget(
   def: Player[],
   h: Point,
   inside: boolean,
+  anchor = false,
 ): Point {
   const candidates = dedupeSpots([preferred, ...options]);
   let best = candidates[0],
     bestScore = -1e9;
   for (const c of candidates) {
-    const score = targetScore(p, c, preferred, reserved, def, h, inside);
+    const score = targetScore(p, c, preferred, reserved, def, h, inside, anchor);
     if (score > bestScore) {
       best = c;
       bestScore = score;
@@ -1906,18 +2043,34 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
       tightBonus = DRIVE_TIGHT_BONUS;
     }
 
+    // The PnR drive edge is now PHYSICAL: a set screen hangs up the on-ball
+    // defender (movement.ts resolveScreenContact), so he lags and the proximity-
+    // keyed contest/lag math rewards the drive on its own. A small residual screen
+    // bonus nudges the handler to attack OFF the pick (commit to the action the set
+    // play exists for) rather than just probe, but the bulk of the advantage comes
+    // from the real separation — no magic bonus standing in for the body.
     const offScreenBonus = (() => {
       if (!onBall) return 0;
       for (const o of off) {
         if (o === bh) continue;
-        if (dist(o, onBall) < 4) return DRIVE_SCREEN_BONUS;
+        // attack DOWNHILL off a set pick: the bonus persists through the screener's
+        // screen AND its immediate roll/pop (the live action) so the handler keeps
+        // pressing to the rim rather than settling once the pick frees him — this is
+        // what keeps the PnR a rim threat against a dropping big.
+        const st = o.ob?.state;
+        if ((st === "screen" || st === "roll" || st === "pop") && o.ob?.screenSet)
+          return DRIVE_SCREEN_BONUS;
       }
       return 0;
     })();
 
     const continuationBonus = s.driving ? DRIVE_CONTINUATION_BONUS : 0;
-    driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + offScreenBonus + continuationBonus)
-      * (1 - laneBlock * 0.7);
+    // The off-a-set-pick downhill bonus is added AFTER the rim-protection multiplier:
+    // coming off the screen with momentum, the handler attacks INTO the dropping big
+    // rather than being walled off pre-emptively (drop concedes the floater/finish).
+    driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + continuationBonus)
+      * (1 - laneBlock * 0.7)
+      + offScreenBonus;
   }
 
   if (dh > OPEN_LANE_MIN_DIST) {
@@ -1967,7 +2120,17 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     const postFeedBonus = postFeedValue(t, def, h);
     const handoffBonus = giveUpBig && handleOf(t) >= BIG_GIVEUP_HANDLE ? HANDOFF_PASS_BONUS : 0;
 
-    const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus
+    // POCKET PASS TO THE ROLLER: a screener diving to the rim off a set pick is the
+    // PnR's primary read — feed him for the rim attempt (lob/dump-off) when his dive
+    // is reasonably open. Scaled toward the rim (a deep roll, not a high pick-up).
+    let rollFeedBonus = 0;
+    if (t.ob?.state === "roll" && td < ROLL_FEED_RANGE) {
+      // a diving roller is a feed even when partially covered (lob/dump-off over the
+      // drop); openness scales it but a contested roll still beats a settle.
+      rollFeedBonus = ROLL_FEED_BONUS * clamp(0.5 + to, 0.5, 1.5);
+    }
+
+    const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus + rollFeedBonus
       - passSelectionPenalty(bh, t, h);
     if (pu > bestPU) {
       bestPU = pu;

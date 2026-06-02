@@ -2,9 +2,11 @@ import { HOOP, COURT_L, DT } from "../core/constants.js";
 import { dist, lerp, clamp } from "../core/math.js";
 import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
-import { moveAll, moveTeam } from "./movement.js";
+import { moveAll, moveTeam, resolveScreenContact, defenderTrail } from "./movement.js";
+import type { ActiveScreen, ScreenScheme } from "./movement.js";
 import { decideOnBall, decideOffBall, resolveOffense, isInsidePlayer } from "./offense.js";
-import { decideDefense } from "./defense.js";
+import { decideDefense, decideScreenCoverage } from "./defense.js";
+import { effectiveTendencies } from "./tendency.js";
 import { sense } from "./snapshot.js";
 import { resolveDefense } from "./resolve.js";
 import { resolveShot, updateFreeThrows } from "./resolution.js";
@@ -44,8 +46,13 @@ function catchSettle(passer: Player | null | undefined, recv: Player): number {
 const CONV_BIG_DIST_FROM_HOOP = 6.5;   // ft from hoop for inside rebound position
 const CONV_BIG_Y_SPREAD = 10.0;         // half-spread in y; wider spread across carom band
 
-// Guards/wings converge to the perimeter rebound band (long caroms land here)
-const CONV_GUARD_DIST_FROM_HOOP = 16.0; // ft from hoop: mid-rebound band
+// Guards/wings converge to the perimeter rebound band (long caroms land here).
+// Pulled in from 16 to 14ft: the ball-driven formation holds the off-ball four at
+// their wide spacing slots at shot release, a touch farther from the rim, so the
+// mid-rebound crash starts from a closer band to keep guards/wings on the glass
+// (else the center over-hoards). Bounded — still the long-carom band, not a paint
+// crash.
+const CONV_GUARD_DIST_FROM_HOOP = 14.0; // ft from hoop: mid-rebound band
 const CONV_GUARD_Y_SPREAD = 13.0;       // half-spread in y; was 11.0 — wider lateral spread
 
 // Defenders box out by sealing slightly rim-side of their assigned man, staying distributed
@@ -95,6 +102,73 @@ function updateShotFlightConvergence(): void {
       x: clamp(lerp(mx, h.x, stepFrac), 1, COURT_L - 1),
       y: clamp(lerp(my, h.y, stepFrac), 3, 47),
     };
+  }
+}
+
+/* Derive the active on-ball screen from live state: the offensive player who has
+   committed to setting the ball screen (ob.state === "screen") for the current
+   handler, the on-ball defender he is impeding, and the defensive scheme. Returns
+   null when there is no live ball screen. Pure read of positions/state — the
+   physical impediment it feeds is rng-free. */
+function activeScreen(): ActiveScreen | null {
+  const bh = G.ball.holder;
+  if (!bh || G.ball.state !== "held") return null;
+  const off = offTeam();
+  const def = defTeam();
+  const screener = off.find((o) => o !== bh && o.ob?.state === "screen" && o.ob.screenTarget);
+  if (!screener) return null;
+  const onBallDef = def.find((d) => d.assign === bh);
+  if (!onBallDef) return null;
+  const scrD = def.find((d) => d.assign === screener);
+  let scheme: ScreenScheme = "fight";
+  if (scrD && scrD !== onBallDef) {
+    const cover = decideScreenCoverage(onBallDef, scrD, bh, screener, tacFor(G.offense === "home" ? "away" : "home"));
+    scheme = cover === "switch" ? "switch" : cover === "drop" ? "drop" : "fight";
+  }
+  const screenQ = screener.attr.strength + effectiveTendencies(screener).screen;
+  const navQ = onBallDef.attr.perimD + onBallDef.attr.iq + onBallDef.attr.speed;
+  return { screener, onBallDef, handler: bh, scheme, screenQ, navQ };
+}
+
+// Handler↔defender gap (ft) at which the pick is deemed USED: the screen opened
+// real separation, so the handler came off it and the screener finishes (roll/pop).
+const SCREEN_USED_GAP = 4.5;
+// Seconds a screen can stay SET before the screener finishes the action anyway (the
+// handler came off it, didn't reset out) — the roll man dives to keep the rim read.
+const SCREEN_ENGAGE_HOLD = 0.6;
+// Handler must be inside this distance from the rim (came off the pick, attacking)
+// for the engage-hold to fire; farther out = he reset out, screen expires instead.
+const SCREEN_ENGAGE_MAX_DEPTH = 26;
+
+/* Apply the physical screen: mark the screen SET (the pick arrived at the point of
+   attack), mark the handler ENGAGED once he has used it (driving off it / pulled
+   ahead of his trailing defender / the pick opened separation, or it's held set
+   while he stays attached), and impede the on-ball defender's body on contact.
+   Roll/pop sequencing (in resolveOffBall) keys on these flags. Runs in ACT after
+   both teams have integrated so it reads current positions. */
+function applyScreenContact(): void {
+  const scr = activeScreen();
+  if (!scr) return;
+  const ob = scr.screener.ob;
+  if (!ob) return;
+  const set = resolveScreenContact(scr);
+  if (set) {
+    const trailNow = defenderTrail(G.ball.holder!, scr.onBallDef, hoop());
+    const gapNow = Math.hypot(G.ball.holder!.x - scr.onBallDef.x, G.ball.holder!.y - scr.onBallDef.y);
+    ob.screenSet = true;
+    // The handler ENGAGED the pick once it has WORKED: he's driving off it, has
+    // pulled ahead of his man toward the rim, OR the pick opened real separation
+    // from his defender. Once engaged, the screener finishes the action (roll/pop).
+    // A pick set for a beat while the handler stays attached to it (hasn't retreated
+    // toward the perimeter) also counts as engaged so the roll man reliably dives —
+    // the PnR's rim threat. If the handler RESETS OUT, this never fires and the
+    // screen expires to a relocate (bug 3). Roll/pop NEVER fires without screenSet.
+    const handlerToHoop = Math.hypot(G.ball.holder!.x - hoop().x, G.ball.holder!.y - hoop().y);
+    const handlerEngaging = handlerToHoop < SCREEN_ENGAGE_MAX_DEPTH;
+    const engaged = G.driving || trailNow > 1.5 || gapNow > SCREEN_USED_GAP;
+    if (engaged || (handlerEngaging && (ob.t ?? 0) > SCREEN_ENGAGE_HOLD)) {
+      ob.screenUsed = true;
+    }
   }
 }
 
@@ -287,6 +361,10 @@ export function tick(): void {
   resolveDefense(defIntents, snap);
   moveTeam(offTeam());
   moveTeam(defTeam());
+  // PHYSICAL SCREEN: after both teams integrate, impede the on-ball defender's body
+  // against a set ball screen (detour + slow) so the pick creates real separation.
+  // Deterministic position effect; reads the active screen from live state.
+  applyScreenContact();
   // ball follows holder after everyone has moved
   if (G.ball.state === "held" && G.ball.holder) {
     G.ball.x = G.ball.holder.x;
