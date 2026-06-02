@@ -132,20 +132,19 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
       cx!.strokeStyle = cue.color;
       cx!.fillStyle = cue.color;
       cx!.globalAlpha = 0.85;
-      // screen: a short "wall" at the screener + a connector to the handler
+      // screen: a bold solid connector to the handler + a thick "wall" at the
+      // screener (kept unmistakable — this is the PnR action).
       if (p.ob?.state === "screen" && holder) {
-        cx!.globalAlpha = 0.5;
-        cx!.setLineDash([2, 2]);
+        cx!.globalAlpha = 0.95;
+        cx!.lineWidth = 2.5;
         line(holder, p);
-        cx!.setLineDash([]);
-        cx!.globalAlpha = 0.85;
         const dx = px(p.x) - px(holder.x),
           dy = py(p.y) - py(holder.y),
           d = Math.hypot(dx, dy) || 1;
         const nx = -dy / d,
           ny = dx / d,
-          w = 7;
-        cx!.lineWidth = 3;
+          w = 9;
+        cx!.lineWidth = 4;
         cx!.beginPath();
         cx!.moveTo(px(p.x) - nx * w, py(p.y) - ny * w);
         cx!.lineTo(px(p.x) + nx * w, py(p.y) + ny * w);
