@@ -315,6 +315,10 @@ const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the res
 const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
 const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
 const SCREEN_TRIGGER_DIST = 4; // ft: screener must be within this of the defender to count as set
+// Wait-for-the-pick: a screener heading to the handler's defender but not yet
+// arrived (within this range of the on-ball defender) is "incoming" — the handler
+// holds for it instead of attacking early, unless he already has a strong look.
+const SCREEN_WAIT_RANGE = 15; // ft from the on-ball defender within which an approaching screen counts as incoming
 
 /* ---------- OFF-BALL UTILITY DECIDER ----------
    The off-ball mover is a per-tick utility decider. holdSpace is the baseline
@@ -541,12 +545,29 @@ export function resolveOffense(
 
   const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
   const noGoodPass = bestPU < HOLD_PASS_QUALITY;
+  // Wait for the pick: if a teammate is actively coming to set a ball screen and it
+  // hasn't arrived yet, the handler holds for it (a PnR ball-handler doesn't drive
+  // off before the screen gets there) — unless he already has a strong look.
+  const onBallD = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
+  const screenIncoming =
+    !!onBallD &&
+    off.some((o) => {
+      if (o === bh || o.ob?.state !== "screen") return false;
+      const dToDef = dist(o, onBallD);
+      return dToDef > SCREEN_TRIGGER_DIST && dToDef < SCREEN_WAIT_RANGE;
+    });
+  // Wait only when there's no compelling look anyway (same gate as a normal hold) —
+  // a good drive/shot/pass is still taken. The screen just lets the handler keep
+  // holding PAST the usual hold-time cap until the pick arrives, then attack off it.
+  const waitForScreen =
+    screenIncoming && noGoodAttack && noGoodPass && best !== postU && G.shotClock > HOLD_MIN_CLOCK;
   const wantHold =
-    noGoodAttack &&
-    noGoodPass &&
-    best !== postU &&
-    G.shotClock > HOLD_MIN_CLOCK &&
-    (G.holdT ?? 0) < HOLD_MAX_T;
+    waitForScreen ||
+    (noGoodAttack &&
+      noGoodPass &&
+      best !== postU &&
+      G.shotClock > HOLD_MIN_CLOCK &&
+      (G.holdT ?? 0) < HOLD_MAX_T);
   if (wantHold) {
     G.holdT = (G.holdT ?? 0) + 0.4;
     G.driving = false;
