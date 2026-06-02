@@ -114,6 +114,13 @@ export type OffBallState = {
   // macro-intent re-screen bonus so he rolls/pops/spaces rather than re-picking
   // every time he resets to "space". Reset with a fresh ob each possession.
   screenedThisPoss?: boolean;
+  // the screen actually made PHYSICAL contact with the on-ball defender (the pick
+  // got there and impeded him) — set by the screen-contact step. Roll/pop sequence
+  // only after this. Distinct from screenedThisPoss (which fires on commit/intent).
+  screenSet?: boolean;
+  // the handler ENGAGED the set screen (drove off it / attacked past the pick).
+  // Roll/pop fires only when screenSet && screenUsed.
+  screenUsed?: boolean;
 };
 
 export type Player = {
