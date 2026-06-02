@@ -1,6 +1,7 @@
 import { COURT_L, COURT_W, HOOP, ARC_R } from "../core/constants.js";
 import { clamp } from "../core/math.js";
-import { G, players, hoop } from "../core/state.js";
+import { G, players, hoop, offTeam } from "../core/state.js";
+import { tacFor } from "../tactics/tactics.js";
 import type { Point } from "../types.js";
 
 /* ---------- 8) RENDER ---------- */
@@ -95,6 +96,66 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
     cx!.fillStyle = getCss("--ball");
     cx!.fill();
   }
+  function arrow(from: Point, to: Point): void {
+    const ang = Math.atan2(py(to.y) - py(from.y), px(to.x) - px(from.x));
+    const hx = px(to.x),
+      hy = py(to.y),
+      s = 5;
+    cx!.beginPath();
+    cx!.moveTo(hx, hy);
+    cx!.lineTo(hx - s * Math.cos(ang - 0.5), hy - s * Math.sin(ang - 0.5));
+    cx!.moveTo(hx, hy);
+    cx!.lineTo(hx - s * Math.cos(ang + 0.5), hy - s * Math.sin(ang + 0.5));
+    cx!.stroke();
+  }
+  /* Off-ball action cues: a faint dashed intent line to each mover's target (so
+     team movement reads as coordinated, not random), brighter arrows for active
+     cut/roll/pop, and a screen "wall" + connector to the handler for the PnR.
+     Keyed off persisted p.ob.state / p.target — no engine coupling. */
+  function drawActionCues(): void {
+    const holder = G.ball.holder;
+    const off = offTeam();
+    const accent = getCss("--ball");
+    cx!.save();
+    cx!.strokeStyle = accent;
+    for (const p of off) {
+      if (p === holder || !p.target) continue;
+      const st = p.ob?.state;
+      const active = st === "cut" || st === "roll" || st === "pop";
+      if (Math.hypot(p.target.x - p.x, p.target.y - p.y) <= 2) continue;
+      cx!.globalAlpha = active ? 0.55 : 0.15;
+      cx!.lineWidth = active ? 1.6 : 1;
+      cx!.setLineDash(active ? [] : [3, 3]);
+      line(p, p.target);
+      if (active) arrow(p, p.target);
+    }
+    cx!.setLineDash([]);
+    // ball screen: connector handler<->screener + a short wall at the screener
+    if (holder) {
+      for (const p of off) {
+        if (p === holder || p.ob?.state !== "screen") continue;
+        cx!.globalAlpha = 0.6;
+        cx!.lineWidth = 1.4;
+        cx!.setLineDash([2, 2]);
+        line(holder, p);
+        cx!.setLineDash([]);
+        const dx = px(p.x) - px(holder.x),
+          dy = py(p.y) - py(holder.y),
+          d = Math.hypot(dx, dy) || 1;
+        const nx = -dy / d,
+          ny = dx / d,
+          w = 7;
+        cx!.lineWidth = 3;
+        cx!.beginPath();
+        cx!.moveTo(px(p.x) - nx * w, py(p.y) - ny * w);
+        cx!.lineTo(px(p.x) + nx * w, py(p.y) + ny * w);
+        cx!.stroke();
+      }
+    }
+    cx!.globalAlpha = 1;
+    cx!.setLineDash([]);
+    cx!.restore();
+  }
   const cssCache: Record<string, string> = {};
   function getCss(v: string): string {
     if (!cssCache[v]) cssCache[v] = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -102,7 +163,24 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
   }
   return function render(): void {
     drawCourt();
+    if (G.ball.state === "held" || G.ball.state === "pass") drawActionCues();
     drawPlayers();
+    // active offense + called action (so the live play is legible)
+    if (G.ball.state === "held" || G.ball.state === "pass") {
+      const tac = tacFor(G.offense);
+      cx!.save();
+      cx!.globalAlpha = 0.7;
+      cx!.fillStyle = G.offense === "home" ? getCss("--home") : getCss("--away");
+      cx!.font = "600 10px IBM Plex Mono";
+      cx!.textAlign = "left";
+      cx!.textBaseline = "top";
+      cx!.fillText(
+        `${G.offense === "home" ? "HOME" : "AWAY"} BALL · ${tac.action.toUpperCase()}`,
+        px(0) + 4,
+        py(0) + 4,
+      );
+      cx!.restore();
+    }
     if (G.scoreFlash && G.scoreFlash.t > 0) {
       const s = G.scoreFlash;
       cx!.save();
