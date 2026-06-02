@@ -331,6 +331,109 @@ const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen positi
 // arrived (within this range of the on-ball defender) is "incoming" — the handler
 // holds for it instead of attacking early, unless he already has a strong look.
 const SCREEN_WAIT_RANGE = 15; // ft from the on-ball defender within which an approaching screen counts as incoming
+const SCREEN_MIN_HANDLER_DIST = 14; // ft from rim: only call a ball screen for a perimeter handler (never a man on the block)
+const SCREEN_PLANT_OFFSET = 2.6; // ft beside the handler the pick spot sits (inside the SET range, so it lands)
+const SCREEN_CALL_EXPIRE = 3.0; // s a screen call lasts before the handler gives up and attacks on his own
+const SCREEN_WAIT_GREAT = 2.7; // only a truly elite immediate look skips the called pick; otherwise the handler waits for it
+const SCREEN_PICK_DIST_W = 1.4; // per ft from the handler: penalize picking a far screener
+const SCREEN_PICK_ROLE_BONUS = 12; // the designated screener role is the natural pick
+
+/* The shared pick SPOT: just beside the handler (perpendicular to his line to the
+   rim), on the side the screener is already on — the rendezvous both the screener
+   and the handler reference. Fixed when the call is made (the handler then holds
+   near it), so the screener runs to a stable point instead of chasing the defender. */
+function pickSpot(handler: Player, screener: Player, h: Point): Point {
+  const ux = handler.x - h.x,
+    uy = handler.y - h.y;
+  const ul = Math.hypot(ux, uy) || 1;
+  let perpX = -uy / ul,
+    perpY = ux / ul;
+  if ((screener.y - handler.y) * perpY + (screener.x - handler.x) * perpX < 0) {
+    perpX = -perpX;
+    perpY = -perpY;
+  }
+  return {
+    x: clamp(handler.x + perpX * SCREEN_PLANT_OFFSET, 3, COURT_L - 3),
+    y: clamp(handler.y + perpY * SCREEN_PLANT_OFFSET, 3, 47),
+  };
+}
+
+/* Pick the screener for a called ball screen: an able screener (screen tendency,
+   role) who is CLOSE to the handler so he can actually get there — not a high-
+   tendency player stranded in the corner. A man posting deep on the block is skipped
+   (he's not coming out to ball-screen). */
+function pickScreener(movers: Player[], bh: Player, h: Point): Player | null {
+  let best: Player | null = null;
+  let bestScore = -Infinity;
+  for (const p of movers) {
+    if (p === bh || !p.ob) continue;
+    if (isInsidePlayer(p) && dist(p, h) < 8) continue;
+    const score =
+      effectiveTendencies(p).screen +
+      (p.role === "screener" ? SCREEN_PICK_ROLE_BONUS : 0) -
+      dist(p, bh) * SCREEN_PICK_DIST_W;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/* ---------- PnR SCREEN CALL (shared coordination) ----------
+   The helios give-and-go model: a CALL (handler picks a screener + a fixed pick spot)
+   + a PERSISTENT intention (the screener commits to running to the spot and planting,
+   NOT re-decided each tick) + the handler holding until it sets. Run each tick before
+   the off-ball deciders. Creates the call when a perimeter handler is running a PnR,
+   keeps the chosen screener committed to the spot, and clears it when the pick is
+   used / expires / the possession changes. This is the single owner of the ball
+   screen's lifecycle (off-ball deciders no longer spawn screens on their own). */
+export function updateScreenCall(): void {
+  const bh = G.ball.holder;
+  const h = hoop();
+  const call = G.screenCall;
+  if (call) {
+    const ob = call.screener.ob;
+    const handlerChanged = bh !== call.handler || G.ball.state !== "held";
+    const expired = G.possClock - call.startClock > SCREEN_CALL_EXPIRE;
+    const usedUp = !!ob?.screenUsed; // pick was used → screener rolls/pops, call done
+    if (handlerChanged || expired || usedUp) {
+      // unused/expired pick → release the screener back to spacing (no phantom roll)
+      if (ob && ob.state === "screen" && !ob.screenSet) {
+        ob.state = "space";
+        ob.t = 0;
+        ob.screenTarget = null;
+      }
+      G.screenCall = null;
+      return;
+    }
+    // keep the screener committed to the fixed pick spot (the persistent intention)
+    if (ob) {
+      ob.state = "screen";
+      ob.screenTarget = call.spot;
+      ob.screenedThisPoss = true;
+    }
+    return;
+  }
+  // create a call: a PnR, with the ball HELD by a perimeter handler, past the bringup
+  if (!bh || G.ball.state !== "held") return;
+  if (tacFor(G.offense).action !== "pnr") return;
+  if (dist(bh, h) <= SCREEN_MIN_HANDLER_DIST) return;
+  if (G.possClock < PNR_BRINGUP_DELAY || G.shotClock <= HOLD_MIN_CLOCK) return;
+  const off = offTeam();
+  if (off.some((o) => o.ob?.screenedThisPoss)) return; // one ball screen per possession
+  const screener = pickScreener(
+    off.filter((o) => o !== bh),
+    bh,
+    h,
+  );
+  if (!screener || !screener.ob) return;
+  const spot = pickSpot(bh, screener, h);
+  G.screenCall = { screener, handler: bh, spot, startClock: G.possClock };
+  screener.ob.state = "screen";
+  screener.ob.screenTarget = spot;
+  screener.ob.t = 0;
+}
 
 /* ---------- OFF-BALL UTILITY DECIDER ----------
    The off-ball mover is a per-tick utility decider. holdSpace is the baseline
@@ -624,27 +727,20 @@ export function resolveOffense(
 
   const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
   const noGoodPass = bestPU < HOLD_PASS_QUALITY;
-  // Wait for the pick: if a teammate is actively coming to set a ball screen and it
-  // hasn't arrived yet, the handler holds for it (a PnR ball-handler doesn't drive
-  // off before the screen gets there) — unless he already has a strong look.
-  const onBallD = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
-  // The handler waits while a teammate is coming to set the pick but it is NOT yet
-  // SET on his defender (ob.screenSet). Once the screen lands physically he stops
-  // waiting and attacks off the real separation. An approaching screener within
-  // WAIT_RANGE also counts as incoming so he holds for it to arrive.
-  const screenIncoming =
-    !!onBallD &&
-    off.some((o) => {
-      if (o === bh || o.ob?.state !== "screen") return false;
-      if (o.ob.screenSet) return false; // already set → attack, don't keep waiting
-      const dToDef = dist(o, onBallD);
-      return dToDef < SCREEN_WAIT_RANGE;
-    });
-  // Wait only when there's no compelling look anyway (same gate as a normal hold) —
-  // a good drive/shot/pass is still taken. The screen just lets the handler keep
-  // holding PAST the usual hold-time cap until the pick arrives, then attack off it.
+  // Wait for the called pick (helios give-and-go model): while a screen CALL is live
+  // for this handler and the pick hasn't physically SET yet, the handler HOLDS STILL
+  // near the pick spot so the screener can rendezvous and plant — he doesn't drive
+  // off early. Once it sets he stops waiting and attacks off the real separation;
+  // skipped if he already has a GREAT look he should just take.
+  const call = G.screenCall;
+  const haveGreatLook = Math.max(shootU, driveU) >= SCREEN_WAIT_GREAT;
   const waitForScreen =
-    screenIncoming && noGoodAttack && noGoodPass && best !== postU && G.shotClock > HOLD_MIN_CLOCK;
+    !!call &&
+    call.handler === bh &&
+    !call.screener.ob?.screenSet &&
+    !haveGreatLook &&
+    best !== postU &&
+    G.shotClock > HOLD_MIN_CLOCK;
   const wantHold =
     waitForScreen ||
     (noGoodAttack &&
@@ -656,7 +752,11 @@ export function resolveOffense(
     G.holdT = (G.holdT ?? 0) + 0.4;
     G.driving = false;
     recordDecision("hold");
-    holdAndProbe(bh, off, def, h);
+    if (waitForScreen) {
+      bh.target = { x: bh.x, y: bh.y }; // hold near the pick spot so the screener can plant
+    } else {
+      holdAndProbe(bh, off, def, h);
+    }
     return;
   }
 
@@ -1318,42 +1418,10 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
         cands.push({ kind: "cut", util: cutU, to: { x: h.x + dir * 2.5, y: cutY }, cutY });
       }
 
-      // screen for the handler: pressured handler + dangerous handler are worth a
-      // pick. The DESIGNATED pnr screener gets a large macro-intent bonus so a ball
-      // screen is set ~every possession (the coordination a set play exists for),
-      // and is exempt from the generic iq/driveRim eligibility gate.
-      // The pnr macro-intent bonus applies only for the FIRST screen this
-      // possession (ob.screenedThisPoss) and after a short bringup beat (possClock)
-      // so the screener rolls/pops/spaces after the action instead of re-picking on
-      // every reset to "space", and the action doesn't fire at possession start.
-      // ONLY the designated pnr screener sets the on-ball ball screen. The old
-      // generic iq/driveRim path let random off-ball players "screen" then roll/pop;
-      // a coherent PnR has one screener who actually sets a physical pick.
-      const isPnrScreener = p === pnrScreener && !ob.screenedThisPoss && G.possClock >= PNR_BRINGUP_DELAY;
-      if (!screenCommitted && !cutCommitted && onBallDef && isPnrScreener) {
-        const hx = bh.x - h.x;
-        const hy = bh.y - h.y;
-        const hlen = Math.hypot(hx, hy) || 1;
-        const ux = hx / hlen;
-        const uy = hy / hlen;
-        let perpX = -uy;
-        let perpY = ux;
-        if ((p.y - onBallDef.y) * perpY + (p.x - onBallDef.x) * perpX < 0) {
-          perpX = -perpX;
-          perpY = -perpY;
-        }
-        const screenTo = {
-          x: clamp(onBallDef.x + perpX * SCREEN_SET_DIST, 3, COURT_L - 3),
-          y: clamp(onBallDef.y + perpY * SCREEN_SET_DIST, 3, 47),
-        };
-        let screenU =
-          SCREEN_UTIL_BASE +
-          SCREEN_UTIL_PRESSURE_BONUS * handlerPressure +
-          SCREEN_UTIL_THREAT_W * handlerThreat;
-        screenU *= screenFactor;
-        if (isPnrScreener) screenU += PNR_SCREEN_BONUS; // dominate holdSpace + noise reliably
-        cands.push({ kind: "screen", util: screenU, to: screenTo, screenTo });
-      }
+      // NOTE: ball screens are no longer spawned here as a per-tick candidate. The
+      // PnR is owned by updateScreenCall() (the shared "call" + a persistent screener
+      // intention) so the screener commits ONCE and runs to the pick spot to
+      // completion, instead of re-deciding "screen" every tick (which thrashed).
 
       // lift: weak-side relocation into open space when the ball changes side.
       if (justPassed && p !== passer) {
@@ -1508,8 +1576,11 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
               ob.screenTarget = null;
               cutCommitted = true;
             }
-          } else if (ob.t > SCREEN_HOLD_EXPIRE) {
-            // unused pick: give up the screen and space out (do NOT roll/pop).
+          } else if (G.screenCall?.screener !== p && ob.t > SCREEN_HOLD_EXPIRE) {
+            // unused pick with NO active call (defensive): give up and space out. A
+            // CALLED screener is never expired here — updateScreenCall owns the
+            // lifecycle (its SCREEN_CALL_EXPIRE), so resolveOffBall doesn't fight it
+            // by yanking him to "space" mid-approach (the bug that killed set-rate).
             ob.state = "space";
             ob.t = 0;
             ob.screenTarget = null;

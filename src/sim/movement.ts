@@ -24,7 +24,10 @@ const SEP_RADIUS = 3.5; // ft; same-team players within this distance trigger re
 const SEP_WEIGHT = 0.4; // fraction of maxSpeed applied as max separation magnitude
 
 function separationDelta(p: Player, ms: number): [number, number] {
-  if (p.hasBall) return [0, 0];
+  // The ball-handler and a screener planting a pick ignore spacing — the screener
+  // WANTS to get tight to the handler/defender to set the screen; same-team repulsion
+  // would otherwise hold him off the pick spot and the screen would never set.
+  if (p.hasBall || p.ob?.state === "screen") return [0, 0];
   let sx = 0,
     sy = 0;
   for (const other of players()) {
