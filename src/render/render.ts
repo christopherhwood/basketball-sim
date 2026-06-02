@@ -108,37 +108,37 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
     cx!.lineTo(hx - s * Math.cos(ang + 0.5), hy - s * Math.sin(ang + 0.5));
     cx!.stroke();
   }
-  /* Off-ball action cues: a faint dashed intent line to each mover's target (so
-     team movement reads as coordinated, not random), brighter arrows for active
-     cut/roll/pop, and a screen "wall" + connector to the handler for the PnR.
-     Keyed off persisted p.ob.state / p.target — no engine coupling. */
+  /* Off-ball action cues. Each PURPOSEFUL action draws a colored arrow toward its
+     target plus a small label, so what each player is doing is self-explanatory
+     (no dotted-vs-solid guessing). Plain spacing drift is intentionally NOT drawn —
+     only named actions (cut/roll/pop/screen) get a cue. Keyed off p.ob.state. */
+  const ACTION_CUE: Record<string, { label: string; color: string }> = {
+    cut: { label: "cut", color: "#46d6f4" }, // cyan — basket/back cut
+    roll: { label: "roll", color: "#f4a23a" }, // orange — roll to rim
+    pop: { label: "pop", color: "#7ddc6b" }, // green — pop to the arc
+    screen: { label: "screen", color: "#f4c542" }, // gold — setting the pick
+  };
   function drawActionCues(): void {
     const holder = G.ball.holder;
-    const off = offTeam();
-    const accent = getCss("--ball");
     cx!.save();
-    cx!.strokeStyle = accent;
-    for (const p of off) {
-      if (p === holder || !p.target) continue;
-      const st = p.ob?.state;
-      const active = st === "cut" || st === "roll" || st === "pop";
-      if (Math.hypot(p.target.x - p.x, p.target.y - p.y) <= 2) continue;
-      cx!.globalAlpha = active ? 0.55 : 0.15;
-      cx!.lineWidth = active ? 1.6 : 1;
-      cx!.setLineDash(active ? [] : [3, 3]);
-      line(p, p.target);
-      if (active) arrow(p, p.target);
-    }
-    cx!.setLineDash([]);
-    // ball screen: connector handler<->screener + a short wall at the screener
-    if (holder) {
-      for (const p of off) {
-        if (p === holder || p.ob?.state !== "screen") continue;
-        cx!.globalAlpha = 0.6;
-        cx!.lineWidth = 1.4;
+    cx!.lineWidth = 1.8;
+    cx!.font = "600 8px IBM Plex Mono";
+    cx!.textAlign = "center";
+    cx!.textBaseline = "bottom";
+    for (const p of offTeam()) {
+      if (p === holder) continue;
+      const cue = ACTION_CUE[p.ob?.state ?? ""];
+      if (!cue) continue;
+      cx!.strokeStyle = cue.color;
+      cx!.fillStyle = cue.color;
+      cx!.globalAlpha = 0.85;
+      // screen: a short "wall" at the screener + a connector to the handler
+      if (p.ob?.state === "screen" && holder) {
+        cx!.globalAlpha = 0.5;
         cx!.setLineDash([2, 2]);
         line(holder, p);
         cx!.setLineDash([]);
+        cx!.globalAlpha = 0.85;
         const dx = px(p.x) - px(holder.x),
           dy = py(p.y) - py(holder.y),
           d = Math.hypot(dx, dy) || 1;
@@ -150,7 +150,13 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
         cx!.moveTo(px(p.x) - nx * w, py(p.y) - ny * w);
         cx!.lineTo(px(p.x) + nx * w, py(p.y) + ny * w);
         cx!.stroke();
+        cx!.lineWidth = 1.8;
+      } else if (p.target && Math.hypot(p.target.x - p.x, p.target.y - p.y) > 2) {
+        // cut/roll/pop: arrow toward the target
+        line(p, p.target);
+        arrow(p, p.target);
       }
+      cx!.fillText(cue.label, px(p.x), py(p.y) - 10);
     }
     cx!.globalAlpha = 1;
     cx!.setLineDash([]);
