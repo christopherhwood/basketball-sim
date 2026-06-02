@@ -4,7 +4,7 @@ import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll, moveTeam, resolveScreenContact, defenderTrail } from "./movement.js";
 import type { ActiveScreen, ScreenScheme } from "./movement.js";
-import { decideOnBall, decideOffBall, resolveOffense, isInsidePlayer } from "./offense.js";
+import { decideOnBall, decideOffBall, resolveOffense, updateScreenCall, isInsidePlayer } from "./offense.js";
 import { decideDefense, decideScreenCoverage } from "./defense.js";
 import { effectiveTendencies } from "./tendency.js";
 import { sense } from "./snapshot.js";
@@ -221,6 +221,7 @@ export function setupPossession(initial: boolean): void {
   G.decideCD = 8;
   G.ball.state = "held";
   G.pnrSwitched = false;
+  G.screenCall = null;
   G.driving = false;
   G.holdT = 0;
   // clear stale targets from the previous possession so nobody drifts the wrong way
@@ -332,6 +333,7 @@ export function tick(): void {
   const snap = sense();
   const defIntents = decideDefense(snap);
   if (G.ball.state === "held") {
+    updateScreenCall(); // own the PnR call + screener intention before the off-ball deciders read it
     const ball = decideOnBall(snap);
     const offBallIntents = decideOffBall(snap);
     resolveOffense(snap, ball, offBallIntents);

@@ -238,6 +238,12 @@ export interface GameState {
   over: boolean;
   feed: FeedEvent[];
   pnrSwitched?: boolean;
+  // The active ball-screen "call" — the shared coordination point for a PnR
+  // (helios-style: a call + a fixed rendezvous spot two agents independently run to).
+  // The handler calls it; the chosen screener runs a PERSISTENT intention to `spot`
+  // (not re-decided each tick) and plants; the handler holds until it sets. Cleared
+  // when the pick is used / expires / the possession changes. Null = no live call.
+  screenCall?: { screener: Player; handler: Player; spot: Point; startClock: number } | null;
   // a player who just secured an offensive rebound near the rim and should go
   // straight back up with a putback; cleared once he decides.
   putbackBy?: Player | null;
