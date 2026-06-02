@@ -110,6 +110,10 @@ export type OffBallState = {
   fill?: Point | null;
   relocatedForDrive?: boolean;
   screenTarget?: Point | null;
+  // pnr screener already set his ball screen this possession — suppresses the
+  // macro-intent re-screen bonus so he rolls/pops/spaces rather than re-picking
+  // every time he resets to "space". Reset with a fresh ob each possession.
+  screenedThisPoss?: boolean;
 };
 
 export type Player = {
@@ -184,7 +188,6 @@ export type Tactics = {
 };
 
 export type FeedEvent = { id: number; t: string; cls?: string };
-export type Screen = { ball: Player; screener: Player };
 export type ScoreFlash = { x: number; y: number; pts: number; team: TeamSide; t: number };
 export type Banner = { text: string; t: number };
 
@@ -225,15 +228,9 @@ export interface GameState {
   shotClock: number;
   possClock: number;
   decideCD: number;
-  actionPhase: string;
-  actionT: number;
-  screen: Screen | null;
   over: boolean;
   feed: FeedEvent[];
   pnrSwitched?: boolean;
-  // per-possession PnR roll/pop decision for the screener (undefined until the
-  // roll phase decides it): true = pick-and-pop to the arc, false = roll to the rim.
-  screenPop?: boolean;
   // a player who just secured an offensive rebound near the rim and should go
   // straight back up with a putback; cleared once he decides.
   putbackBy?: Player | null;

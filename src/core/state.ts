@@ -23,9 +23,6 @@ export function newGame(seed?: number, rosters?: { home: Player[]; away: Player[
     shotClock: 24,
     possClock: 0,
     decideCD: 0,
-    actionPhase: "bringup",
-    actionT: 0,
-    screen: null, // {ball:player, screener:player}
     over: false,
     feed: [],
   };

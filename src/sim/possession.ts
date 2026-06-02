@@ -145,9 +145,6 @@ export function setupPossession(initial: boolean): void {
   G.shotClock = 24;
   G.possClock = 0;
   G.decideCD = 8;
-  G.actionPhase = "bringup";
-  G.actionT = 0;
-  G.screen = null;
   G.ball.state = "held";
   G.pnrSwitched = false;
   G.driving = false;

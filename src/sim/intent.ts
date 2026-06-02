@@ -107,6 +107,8 @@ export interface OffBallDecision {
   cutState: boolean; // mover is already in "cut" this tick
   fillState: boolean; // mover is already in "fill"
   screenState: boolean; // mover is already in "screen"
+  rollState: boolean; // pnr screener is already rolling to the rim
+  popState: boolean; // pnr screener is already popping beyond the arc
   tookDriveRelocate: boolean; // space mover relocated weak-side for a drive this tick
   heldDriving: boolean; // space mover held its prior target during a drive (no relocate)
   heldDwell: boolean; // space mover held its prior target inside the dwell window
