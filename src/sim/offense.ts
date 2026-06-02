@@ -332,6 +332,7 @@ const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen positi
 // holds for it instead of attacking early, unless he already has a strong look.
 const SCREEN_WAIT_RANGE = 15; // ft from the on-ball defender within which an approaching screen counts as incoming
 const SCREEN_MIN_HANDLER_DIST = 14; // ft from rim: only call a ball screen for a perimeter handler (never a man on the block)
+const SCREEN_MAX_HANDLER_DIST = 30; // ft from rim: above this the handler is too far out to call a useful ball screen
 const SCREEN_PLANT_OFFSET = 2.6; // ft beside the handler the pick spot sits (inside the SET range, so it lands)
 const SCREEN_CALL_EXPIRE = 3.0; // s a screen call lasts before the handler gives up and attacks on his own
 const SCREEN_WAIT_GREAT = 2.7; // only a truly elite immediate look skips the called pick; otherwise the handler waits for it
@@ -418,7 +419,8 @@ export function updateScreenCall(): void {
   // create a call: a PnR, with the ball HELD by a perimeter handler, past the bringup
   if (!bh || G.ball.state !== "held") return;
   if (tacFor(G.offense).action !== "pnr") return;
-  if (dist(bh, h) <= SCREEN_MIN_HANDLER_DIST) return;
+  const handlerDist = dist(bh, h);
+  if (handlerDist <= SCREEN_MIN_HANDLER_DIST || handlerDist > SCREEN_MAX_HANDLER_DIST) return;
   if (G.possClock < PNR_BRINGUP_DELAY || G.shotClock <= HOLD_MIN_CLOCK) return;
   const off = offTeam();
   if (off.some((o) => o.ob?.screenedThisPoss)) return; // one ball screen per possession
@@ -1526,6 +1528,19 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
 
       // --- cut in progress (committed) ---
       if (dec.cutState) {
+        // Don't cut INTO a live drive: a committed cutter on the DRIVE SIDE (in the
+        // lane the handler is attacking) clears OUT to the weak-side corner instead of
+        // diving into the congestion and dragging his man to the ball. A WEAK-SIDE
+        // cutter keeps going — he's the dunker/dump-off target on the help-side, a
+        // real rim finish, not congestion.
+        if (G.driving && (p.y < 25) === (bh.y < 25)) {
+          const corner = { x: clamp(h.x + dir * 3, 3, COURT_L - 3), y: bh.y < 25 ? 46 : 4 };
+          p.target = corner;
+          ob.state = "fill";
+          ob.t = 0;
+          ob.fill = corner;
+          continue;
+        }
         p.target = dec.to;
         cutCommitted = true;
         if (dist(p, { x: h.x, y: 25 }) < 5.5 || ob.t > 2.0) {
