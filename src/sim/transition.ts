@@ -14,7 +14,7 @@ const STEAL_REACTION_DELAY = 0.35;
 // least this many seconds have elapsed (a guard reaches the top in ~1.5s at full
 // speed, then reads the floor), so possessions don't start their offense the
 // instant the ball crosses half court. Keeps pace realistic (~3-4s to initiate).
-const BRINGUP_MIN_T = 3.4;
+const BRINGUP_MIN_T = 1.8; // min advance time before settling into the half-court (the handler then brings it the rest of the way himself)
 const FASTBREAK_RECOVERY_BASE = 0.16;
 const FASTBREAK_RECOVERY_SPEED_SLOPE = 0.012;
 const FASTBREAK_RECOVERY_DEF_SLOPE = 0.06;
@@ -26,6 +26,7 @@ const FASTBREAK_RECOVERY_MAX = 0.34;
 // (crashed the glass) or got caught moving the wrong way (a live steal). A clean
 // defensive rebound against a balanced floor is walked up, NOT run out — most of
 // the conceding team has floor balance and gets back before the ball is advanced.
+const SETTLE_FRONTCOURT_DIST = 40; // ft from the attacked rim: PG is in the frontcourt → settle to half-court (handler initiates from here)
 const FB_MIN_RUNWAY = 24; // ft from the rim: closer than this and there's no break to have
 const FB_DREB_BASE = 0.01; // base break chance off a defensive rebound (balanced floor, long-board leak-out)
 const FB_STEAL_BASE = 0.5; // base off a live steal (defense scrambling the wrong way)
@@ -246,7 +247,11 @@ export function updateTransition(): void {
       if (!m || (tr.stealStart && tr.t < STEAL_REACTION_DELAY)) return;
       d.target = fastBreakRecoveryTarget(d, m, atk, m === tr.pg);
     });
-    if ((dist(tr.pg, top) < 6 && tr.t >= BRINGUP_MIN_T) || tr.t > 9) {
+    // Settle into the half-court as soon as the PG has the ball in the FRONTCOURT —
+    // the handler then brings it the rest of the way and initiates through his own
+    // half-court decisions (dribble up, call a screen, …), one continuous flow,
+    // instead of a separate hard-coded "dribble all the way to the top" bringup stage.
+    if ((dist(tr.pg, atk) < SETTLE_FRONTCOURT_DIST && tr.t >= BRINGUP_MIN_T) || tr.t > 9) {
       settleHalfCourt(tr.pg);
     }
   }
