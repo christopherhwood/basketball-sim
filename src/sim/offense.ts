@@ -346,6 +346,39 @@ const SCREEN_UTIL_THREAT_W = 0.9; // per unit of handler threat (a dangerous han
 const LIFT_UTIL_BASE = -1.4; // baseline lift attraction (just under holdSpace)
 const LIFT_UTIL_BALLMOVE_BONUS = 1.0; // extra the tick a pass was just caught (ball changed side)
 
+/* ---------- MOTION-OFFENSE INFLUENCES ----------
+   Shared coordination principles that bias each off-ball player's EXISTING utility
+   decisions so the five movers read as a single motion offense (not five players
+   running around independently). Every weight is a bias on a candidate already
+   scored above; none scripts a player. The triggers (handler driving + drive
+   direction, a pass just happened, my man overplaying, a teammate vacated a spot)
+   are read deterministically from the snapshot — no rng (that stays in RESOLVE).
+
+   1) PUSH/PULL on drives: when the handler drives, a mover on the drive's side
+      PUSHES (clears to the spot away from the lane); a mover away from the drive
+      is PULLED to FILL the vacated ball-side gap. One coherent rule per player =
+      globally coherent spacing, replacing the old single weak-side relocate. */
+const DRIVE_PUSH_DEPTH_MAX = 19; // ft from hoop within which a same-side mover clears the lane
+const DRIVE_PULL_ON = false; // weak-side corner-lift on a drive (see the PULL block for why it's off in this build)
+const DRIVE_PULL_PENETRATION = 13; // ft handler-to-rim within which a weak-side man lifts to fill the ball-side corner (the genuine collapse moment)
+// 2) PASS-AND-MOVE: never stand still. The passer's give-and-go is GIVEGO_UTIL_BONUS
+//    above; additionally every mover takes a small holdSpace penalty once he's been
+//    stationary, so someone is always moving with purpose.
+const IDLE_DWELL_T = 2.6; // seconds settled at a spot before the idle penalty applies (long: only true standing-around)
+const IDLE_HOLD_PENALTY = 0.0; // OFF: a weak-side idle nudge measurably trades away rim finishes in this engine for no coordination payoff; the give-and-go / lift / push / corner-fill already keep the off-ball four flowing. Hook kept (dial up if play looks static).
+// 4) FILL THE VACATED SPOT: when a teammate is cutting/has vacated his home spot, a
+//    nearby free mover biases to relocate into that open spot (floor balance —
+//    corners filled). Collisions broken by the existing spacing repulsion + the
+//    fixed mover order (earlier index claims the fill first).
+const FILL_VACATED_BONUS = 0.7; // lift-util bonus to fill an EMPTY corner a cutter vacated (gentle: nudges floor balance, doesn't out-compete a rim cut)
+const FILL_VACATED_RADIUS = 12; // ft: a mover this close to a vacated spot is the one who fills it
+const FILL_VACATED_MIN_GAP = 6; // ft: only fill if the mover is genuinely OUT of position (>this from the vacated spot) — else he's effectively already there
+// 5) ACTIVE PLAY AS BIAS: "motion" leans the pass-and-move / cut / fill bonuses up;
+//    "pnr" keeps them at baseline (the screen action carries its own bonus). The
+//    play INFLUENCES, never dictates.
+const MOTION_ACTION_SCALE = 1.35; // multiplier on motion bonuses under the "motion" action
+const PNR_ACTION_SCALE = 1.0; // baseline under "pnr" (screen prominence handled elsewhere)
+
 const SPACE_DWELL_MIN = 1.5; // seconds a player holds its spot after each relocation before re-evaluating
 const RETARGET_MIN_SHIFT = 2.5; // ft: ignore retarget if new target is closer than this to current
 const TARGET_MIN_PERIMETER_DIST = 12; // classic motion spacing: keep perimeter slots a full gap apart
@@ -788,7 +821,8 @@ interface OffBallSetup {
   movers: Player[];
   pnrScreener: Player | null;
   driving: boolean;
-  driveLow: boolean;
+  driveSideLow: boolean; // the drive lane is on the bottom (y<25) half of the floor
+  motionScale: number; // active-play scale on the motion bonuses (tac.action)
   justPassed: boolean;
   passer: Player | null;
   earlyClock: number;
@@ -820,7 +854,11 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
   const dir = G.attackHoop === "R" ? -1 : 1;
   const spots = spotsFor(G.attackHoop);
   const driving = !!G.driving && dist(bh, h) < 20;
-  const driveLow = bh.y < 25;
+  // The drive lane runs from the handler toward the rim; its lateral side is the
+  // midpoint of that segment, so a handler driving baseline from the top still
+  // reads as committing to one side. Push/pull keys off this, not the raw bh.y.
+  const driveSideLow = (bh.y + h.y) / 2 < 25;
+  const motionScale = tac.action === "motion" ? MOTION_ACTION_SCALE : PNR_ACTION_SCALE;
   const justPassed = G.decideCD === 3;
   const passer = G.pendingAssist || null;
   const earlyClock = clamp((G.shotClock - (24 - CUT_EARLY_CLOCK_T)) / CUT_EARLY_CLOCK_T, 0, 1);
@@ -863,7 +901,8 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
     movers,
     pnrScreener,
     driving,
-    driveLow,
+    driveSideLow,
+    motionScale,
     justPassed,
     passer,
     earlyClock,
@@ -888,7 +927,7 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
 export function decideOffBall(s: Snapshot): OffBallDecision[] {
   const bh = G.ball.holder;
   if (!bh) return []; // ball in flight: resolve holds spacing, no per-mover decisions
-  const { off, def, h, dir, spots, perimeterSpots, insideSpots, homeOf, defByAssign, movers, pnrScreener, driving, driveLow, justPassed, passer, earlyClock } =
+  const { off, def, h, dir, spots, perimeterSpots, insideSpots, homeOf, defByAssign, movers, pnrScreener, driving, driveSideLow, motionScale, justPassed, passer, earlyClock } =
     offBallSetup(s, bh);
   const out: OffBallDecision[] = [];
 
@@ -899,9 +938,32 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
     reserved.push({ p, point: p.target, inside: p.role === "screener" || isInsidePlayer(p) });
   }
   // snapshot-derived reservations (decide does NOT see same-tick commitments)
-  let driveRelocationUsed = false;
+  // Push and pull each fire at most once per tick (one mover clears the lane, one
+  // mover fills the gap) so the drive shifts the floor coherently without everyone
+  // relocating at once (which would look busy / break spacing).
+  let drivePushUsed = false;
+  let drivePullUsed = false;
   const cutCommitted = movers.some((p) => p.ob?.state === "cut");
   const screenCommitted = movers.some((p) => p.ob?.state === "screen");
+
+  // FILL THE VACATED SPOT (principle 4): when a CORNER spot's owner has cut away
+  // from it AND no other offensive player is occupying it, a nearby free mover is
+  // gently nudged to fill it so the floor stays balanced (corners filled, spacing
+  // preserved). Restricted to corners (the spacing-critical spots the principle
+  // emphasizes) and to genuinely EMPTY spots so it doesn't constantly convert
+  // would-be cutters into perimeter fillers. Bigs keep their inside homes.
+  const isCorner = (pt: Point): boolean => pt.y <= 10 || pt.y >= 40;
+  const occupiedByOffense = (pt: Point): boolean => offTeam().some((o) => dist(o, pt) < FILL_VACATED_MIN_GAP);
+  const vacatedSpots: Point[] = [];
+  for (const p of movers) {
+    if (isInsidePlayer(p) || p.ob?.state !== "cut") continue;
+    const home = homeOf.get(p);
+    if (!home || !isCorner(home) || occupiedByOffense(home)) continue;
+    vacatedSpots.push(home);
+  }
+  let fillClaimed = false; // one filler per vacated spot per tick (fixed mover order)
+
+  // on-ball defender pressure on the handler (drives the screen utility)
 
   // on-ball defender pressure on the handler (drives the screen utility)
   const onBallDef = def.find((dd) => dd.assign === bh) || nearestDef(bh, def).d;
@@ -992,13 +1054,48 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
     if (shouldClearLane(p, h)) {
       tgt = laneClearSpot(p, home, h, dir);
     } else if (driving) {
-      const onDriveSide = p.y < 25 === driveLow;
-      if (onDriveSide && dist(p, h) < 19 && !ob.relocatedForDrive && !driveRelocationUsed) {
+      // PUSH/PULL on the drive (principle 1). One coherent per-player rule:
+      //   - a mover on the SAME side as the drive lane, near the rim, PUSHES away
+      //     to the weak side, clearing the lane the driver is attacking;
+      //   - a mover on the FAR side is PULLED to FILL the vacated ball-side gap
+      //     (relocate toward the drive's side / corner), so the floor refills as
+      //     the drive collapses the help. Applied per-player off the drive
+      //     direction → globally coherent movement, no central script.
+      const onDriveSide = p.y < 25 === driveSideLow;
+      if (onDriveSide && dist(p, h) < DRIVE_PUSH_DEPTH_MAX && !ob.relocatedForDrive && !drivePushUsed) {
+        // PUSH: clear to the weak side, away from the drive lane.
         tgt = { x: home.x, y: 50 - home.y };
         dec.tookDriveRelocate = true;
-        driveRelocationUsed = true; // single weak-side relocation per drive tick
+        drivePushUsed = true; // single push relocation per drive tick
+      } else if (
+        !onDriveSide &&
+        !inside &&
+        !isCorner(p) &&
+        DRIVE_PULL_ON &&
+        dist(p, h) > 21 &&
+        dist(bh, h) < DRIVE_PULL_PENETRATION &&
+        !ob.relocatedForDrive &&
+        !drivePullUsed
+      ) {
+        // PULL/FILL (the second half of principle 1): once the drive has PENETRATED
+        // (handler collapsing the defense near the rim), a weak-side PERIMETER man
+        // (a wing/top, not already a corner) lifts to the ball-side CORNER the drive
+        // opened — a spaced kick-out spot WELL out of the lane.
+        //
+        // OFF in this build: in this engine the relocating man drags his defender
+        // toward the strong side, where the defense reads it as help and contains
+        // the drive — measurably trimming rim finishes for a drive-heavy team
+        // (tests/driving.ts floor) without a coordination payoff worth that cost.
+        // The PUSH half (clearing the lane) carries the drive-coordination cleanly
+        // on its own; the hook stays so PULL can be re-enabled if the help-read is
+        // later tuned to not over-commit to a corner lift.
+        const cornerY = driveSideLow ? 4 : 46;
+        tgt = { x: Math.max(home.x, h.x + dir * 22), y: cornerY };
+        dec.tookDriveRelocate = true;
+        drivePullUsed = true;
       } else if (p.target) {
-        // hold current (frozen prior) target while the drive continues
+        // already relocated for this drive (or another mover took the slot this
+        // tick): hold the current (frozen prior) target while the drive continues.
         dec.heldDriving = true;
         dec.to = p.target;
         reserved.push({ p, point: dec.to, inside });
@@ -1032,7 +1129,21 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
     dec.retarget = holdShifts; // resolve resets ob.t = 0 only on a real relocation
 
     // --- SCORE candidate actions (free mover) ---
-    const cands: OffBallCandidate[] = [{ kind: "holdSpace", util: HOLD_SPACE_BASE, to: holdApplied }];
+    // PASS-AND-MOVE / never stand still (principle 2): a perimeter mover who has
+    // gone genuinely idle on the WEAK side (settled, away from the ball, ball not
+    // driving) takes a small holdSpace penalty so the off-ball four keep flowing.
+    // Kept weak-side-only and gentle so it never crowds a strong-side drive lane;
+    // the give-and-go (passer cut), lift, push, and corner-fill carry the rest of
+    // "don't stand still". Off in this build (see IDLE_HOLD_PENALTY) — the
+    // higher-leverage motion rules already keep movement flowing without it; the
+    // hook stays so the nudge can be dialed back in if play looks too static.
+    const ballSideLow = bh.y < 25;
+    const weakSide = (p.y < 25) !== ballSideLow;
+    const idle = !driving && !inside && weakSide && ob.state === "space" && ob.t >= IDLE_DWELL_T;
+    const idlePenalty = idle ? IDLE_HOLD_PENALTY * motionScale : 0;
+    const cands: OffBallCandidate[] = [
+      { kind: "holdSpace", util: HOLD_SPACE_BASE - idlePenalty, to: holdApplied },
+    ];
 
     if (!driving && !shouldClearLane(p, h)) {
       const finishW = (p.attr.finishing - 50) * CUT_UTIL_FINISH_W;
@@ -1042,16 +1153,19 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
       const cutY = overplayed ? (p.y < 25 ? 20 : 30) : p.y < 25 ? 19 : 31;
 
       // cut: basket / backdoor / give-and-go. Only when no teammate is already
-      // cutting (one cutter in the lane at a time, matching the legacy mutex).
+      // cutting (one cutter in the lane at a time, matching the legacy mutex). The
+      // pass-and-move (give-and-go on the passer), early-motion, and backdoor reads
+      // are scaled UP under the "motion" action (principle 5 — the play biases, it
+      // doesn't dictate); "pnr" leaves them at baseline.
       if (!cutCommitted) {
         let cutU =
           CUT_UTIL_BASE +
-          (justPassed ? CUT_UTIL_PASS_BONUS : 0) +
-          earlyClock * CUT_UTIL_EARLY_BONUS +
+          (justPassed ? CUT_UTIL_PASS_BONUS * motionScale : 0) +
+          earlyClock * CUT_UTIL_EARLY_BONUS * motionScale +
           (overplayed ? CUT_UTIL_OVERPLAY_BONUS : 0) +
           (laneOpen ? CUT_UTIL_LANE_BONUS : 0) +
           finishW +
-          (justPassed && p === passer ? GIVEGO_UTIL_BONUS : 0);
+          (justPassed && p === passer ? GIVEGO_UTIL_BONUS * motionScale : 0);
         cutU *= cutFactor;
         cands.push({ kind: "cut", util: cutU, to: { x: h.x + dir * 2.5, y: cutY }, cutY });
       }
@@ -1101,8 +1215,32 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
           h,
           inside,
         );
-        const liftU = (LIFT_UTIL_BASE + LIFT_UTIL_BALLMOVE_BONUS) * tendencyFactor(tend.pass);
+        const liftU =
+          (LIFT_UTIL_BASE + LIFT_UTIL_BALLMOVE_BONUS * motionScale) * tendencyFactor(tend.pass);
         cands.push({ kind: "lift", util: liftU, to: liftTo });
+      }
+
+      // FILL THE VACATED SPOT (principle 4): a perimeter mover near a spot a cutter
+      // just vacated is pulled to fill it (relocate into the open spot) so the floor
+      // stays balanced — corners filled, formation occupied. Nearest-by-mover-order
+      // claims it (one filler per tick); the spacing repulsion breaks any overlap.
+      if (!inside && !fillClaimed && vacatedSpots.length > 0) {
+        let nearest: Point | null = null;
+        let nd = FILL_VACATED_RADIUS;
+        for (const v of vacatedSpots) {
+          const dd = dist(p, v);
+          if (dd < FILL_VACATED_MIN_GAP) continue; // effectively already there
+          if (dd < nd) {
+            nd = dd;
+            nearest = v;
+          }
+        }
+        if (nearest) {
+          const fillTo = reserveAwareTarget(p, nearest, spacingOptions, reserved, def, h, inside);
+          const fillU = (LIFT_UTIL_BASE + FILL_VACATED_BONUS * motionScale) * tendencyFactor(tend.pass);
+          cands.push({ kind: "lift", util: fillU, to: fillTo });
+          fillClaimed = true;
+        }
       }
     }
 
