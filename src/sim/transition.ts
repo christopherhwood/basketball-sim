@@ -266,9 +266,6 @@ function settleHalfCourt(pg: Player): void {
   pg.hasBall = true;
   G.ball.from = pg;
   G.decideCD = 6;
-  G.actionPhase = "bringup";
-  G.actionT = 0;
-  G.screen = null;
   G.pnrSwitched = false;
   G.driving = false;
   players().forEach((p) => {

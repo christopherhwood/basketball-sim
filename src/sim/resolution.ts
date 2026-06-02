@@ -354,7 +354,6 @@ function missAndRebound(sh: Player): void {
     G.ball.holder = best;
     best.hasBall = true;
     G.shotClock = Math.max(G.shotClock, 14);
-    G.actionPhase = "screen";
     // Putback: an offensive board secured at the rim goes RIGHT back up before
     // the defense resets — decide almost immediately, biased to finish. A rebound
     // grabbed away from the rim resets into a normal half-court possession.

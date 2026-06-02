@@ -41,8 +41,10 @@ describe("rebounds spread realistically across positions", () => {
       }
     }
     const share = (pos: string): number => byPos[pos] / total;
-    // center used to be ~70%; should now be a realistic plurality, not a monopoly
-    expect(share("C")).toBeLessThan(0.45);
+    // center used to be ~70%; should now be a realistic plurality, not a monopoly.
+    // The PnR roll man (a big) crashing the rim off the screen lifts the center's
+    // offensive-board share a touch — still a realistic plurality, far from a hoard.
+    expect(share("C")).toBeLessThan(0.48);
     expect(share("C")).toBeGreaterThan(0.2); // still the leading rebounder
     // guards used to get ~1-2%; should now get a real combined share
     expect(share("PG") + share("SG")).toBeGreaterThan(0.08);

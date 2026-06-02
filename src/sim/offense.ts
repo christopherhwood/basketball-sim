@@ -250,6 +250,28 @@ const POP_OUT_DEPTH = 24.5; // ft from the hoop the screener pops to (beyond the
 const POP_SHARE_BASE = 0.4; // base share of PnRs a capable shooter pops (rest he rolls)
 const POP_SHARE_SLOPE = 0.012; // per point of shootThree above 50 → more popping
 
+// PnR macro-intent: the designated screener gets a large additive bonus on the
+// "screen" candidate so a ball screen is set ~every possession (the coordination a
+// set play exists for — pure-neutral utility wouldn't reliably reproduce it). It is
+// large enough to clear holdSpace + OFFBALL_NOISE every decision window. A short
+// bringup delay (possClock) lets the handler get the ball up the floor before the
+// screener comes to set the pick — without it the action fires at possession start
+// and inflates pace (legacy had a bringup→screen phase gate that did the same).
+const PNR_SCREEN_BONUS = 6.0;
+const PNR_BRINGUP_DELAY = 1.6; // seconds into the possession before the screener sets the pick
+
+// Roll-vs-pop UTILITY (replaces the old chance(G.screenPop) rng). After the screen
+// is set the screener picks roll (dive to the rim) vs pop (lift beyond the arc) by
+// utility: pop is weighted by his three RATING, his shootThree tendency, and whether
+// the pop is open; roll is the default for non-shooters. Deterministic — the choice
+// is a function of frozen ratings/tendencies/geometry, decided at the commit moment.
+const POP_RATING_PIVOT = POP_THREE_RATING; // three rating at which pop interest turns on
+const POP_RATING_SLOPE = 0.05; // per point of three rating above the pivot
+const POP_TEND_SLOPE = 0.02; // per point of shootThree above the pop tendency floor
+const POP_OPEN_BONUS = 0.5; // pop is more attractive when the pop spot is uncontested
+const ROLL_BASE_UTIL = 1.0; // baseline roll attraction (the dive is the default action)
+const POP_OPEN_RADIUS = 6; // ft: a defender within this of the pop spot makes it contested
+
 // Inside home spots (relative to the attacking hoop), assigned to bigs so they
 // stop drifting to the arc. Homes are lane-adjacent; block touches are temporary.
 const INSIDE_X = 5; // ft from the hoop along the baseline axis for block spots
@@ -747,10 +769,11 @@ function rimHelp(bh: Player, def: Player[], h: Point): number {
 
 /* ---------- OFF-BALL SHARED SETUP ----------
    The deterministic spacing inputs both decideOffBall and resolveOffBall need:
-   the mover list (non-handler offensive players, the active pnr screener excluded),
-   their role-true perimeter/inside home spots, the defender-by-assignment index,
-   and the ball-reactive context (driving, justPassed, passer, earlyClock). Pure:
-   reads frozen-equivalent live state, no rng, no mutation. */
+   the mover list (non-handler offensive players — the pnr screener is now a normal
+   mover/decider), their role-true perimeter/inside home spots, the defender-by-
+   assignment index, the designated pnr screener (under the pnr macro-intent), and
+   the ball-reactive context (driving, justPassed, passer, earlyClock). Pure: reads
+   frozen-equivalent live state, no rng, no mutation. */
 interface OffBallSetup {
   off: Player[];
   def: Player[];
@@ -763,11 +786,30 @@ interface OffBallSetup {
   homeOf: Map<Player, Point>;
   defByAssign: Map<Player, Player>;
   movers: Player[];
+  pnrScreener: Player | null;
   driving: boolean;
   driveLow: boolean;
   justPassed: boolean;
   passer: Player | null;
   earlyClock: number;
+}
+
+/* The designated ball-screener under the pnr macro-intent: the eligible mover with
+   the highest (effective) screen tendency, role==="screener"/off[4] as the seed and
+   tiebreak. Null when the play isn't pnr or the would-be screener has the ball.
+   Mirrors the legacy phase-machine pick so the same big sets the pick. */
+function designatedScreener(off: Player[], movers: Player[], bh: Player, tac: Tactics): Player | null {
+  if (tac.action !== "pnr") return null;
+  let screener = off.find((p) => p.role === "screener") || off[4];
+  let bestScreen = !screener || screener === bh ? -1 : effectiveTendencies(screener).screen;
+  for (const p of movers) {
+    const sc = effectiveTendencies(p).screen;
+    if (sc > bestScreen) {
+      bestScreen = sc;
+      screener = p;
+    }
+  }
+  return screener && screener !== bh ? screener : null;
 }
 
 function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
@@ -786,9 +828,9 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
   const movers: Player[] = [];
   for (const p of off) {
     if (p === bh) continue;
-    if (tac.action === "pnr" && G.screen?.screener === p) continue; // active pnr screener is owned by pnr logic
-    movers.push(p);
+    movers.push(p); // the pnr screener is now a normal off-ball decider (no exclusion)
   }
+  const pnrScreener = designatedScreener(off, movers, bh, tac);
   const bigs = movers.filter(isInsidePlayer);
   const perimeterSpots = [spots[1], spots[2], spots[3], spots[4]];
   const insideSpots: Point[] = [
@@ -819,6 +861,7 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
     homeOf,
     defByAssign,
     movers,
+    pnrScreener,
     driving,
     driveLow,
     justPassed,
@@ -845,7 +888,7 @@ function offBallSetup(s: Snapshot, bh: Player): OffBallSetup {
 export function decideOffBall(s: Snapshot): OffBallDecision[] {
   const bh = G.ball.holder;
   if (!bh) return []; // ball in flight: resolve holds spacing, no per-mover decisions
-  const { off, def, h, dir, spots, perimeterSpots, insideSpots, homeOf, defByAssign, movers, driving, driveLow, justPassed, passer, earlyClock } =
+  const { off, def, h, dir, spots, perimeterSpots, insideSpots, homeOf, defByAssign, movers, pnrScreener, driving, driveLow, justPassed, passer, earlyClock } =
     offBallSetup(s, bh);
   const out: OffBallDecision[] = [];
 
@@ -886,6 +929,8 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
       cutState: false,
       fillState: false,
       screenState: false,
+      rollState: false,
+      popState: false,
       tookDriveRelocate: false,
       heldDriving: false,
       heldDwell: false,
@@ -919,7 +964,25 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
         dec.to = ob.screenTarget;
         reserved.push({ p, point: dec.to, inside: true });
       }
-      // (no screenTarget → resolve drops to space; spacing target stays = home)
+      // (no screenTarget → resolve drops to roll/pop; spacing target stays = home)
+      out.push(dec);
+      continue;
+    }
+    // --- roll to the rim (committed) — screener dives inside after the pick ---
+    if (ob.state === "roll") {
+      dec.committed = true;
+      dec.rollState = true;
+      dec.to = legalInsideHome(p, h, dir);
+      reserved.push({ p, point: dec.to, inside: true });
+      out.push(dec);
+      continue;
+    }
+    // --- pop beyond the arc (committed) — stretch screener lifts for a three ---
+    if (ob.state === "pop") {
+      dec.committed = true;
+      dec.popState = true;
+      dec.to = { x: h.x + dir * POP_OUT_DEPTH, y: 30 };
+      reserved.push({ p, point: dec.to, inside: false });
       out.push(dec);
       continue;
     }
@@ -993,8 +1056,16 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
         cands.push({ kind: "cut", util: cutU, to: { x: h.x + dir * 2.5, y: cutY }, cutY });
       }
 
-      // screen for the handler: pressured handler + dangerous handler are worth a pick.
-      if (!screenCommitted && !cutCommitted && onBallDef && (tend.driveRim > 50 || p.attr.iq > 55)) {
+      // screen for the handler: pressured handler + dangerous handler are worth a
+      // pick. The DESIGNATED pnr screener gets a large macro-intent bonus so a ball
+      // screen is set ~every possession (the coordination a set play exists for),
+      // and is exempt from the generic iq/driveRim eligibility gate.
+      // The pnr macro-intent bonus applies only for the FIRST screen this
+      // possession (ob.screenedThisPoss) and after a short bringup beat (possClock)
+      // so the screener rolls/pops/spaces after the action instead of re-picking on
+      // every reset to "space", and the action doesn't fire at possession start.
+      const isPnrScreener = p === pnrScreener && !ob.screenedThisPoss && G.possClock >= PNR_BRINGUP_DELAY;
+      if (!screenCommitted && !cutCommitted && onBallDef && (isPnrScreener || tend.driveRim > 50 || p.attr.iq > 55)) {
         const hx = bh.x - h.x;
         const hy = bh.y - h.y;
         const hlen = Math.hypot(hx, hy) || 1;
@@ -1015,6 +1086,7 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
           SCREEN_UTIL_PRESSURE_BONUS * handlerPressure +
           SCREEN_UTIL_THREAT_W * handlerThreat;
         screenU *= screenFactor;
+        if (isPnrScreener) screenU += PNR_SCREEN_BONUS; // dominate holdSpace + noise reliably
         cands.push({ kind: "screen", util: screenU, to: screenTo, screenTo });
       }
 
@@ -1044,85 +1116,27 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
 /* ---------- 4) OFF-BALL RESOLVE ----------
    Applies the decideOffBall() output and does the noise + selection + state-machine
    half: for a MID-COMMITMENT mover it advances/expires the commitment (cut→fill→
-   space, screen hold/abort) and applies the continuation target; for a FREE mover
-   it adds decision NOISE (randn()*OFFBALL_NOISE) to each scored candidate, picks
-   the best, COMMITS it (sets ob.state, resets ob.t, applies its target). holdSpace
-   wins → stay spacing. It also keeps the pnr PHASE logic (bringup→screen→roll,
-   screenPop) and the lane-clear handling. ALL off-ball rng lives here, consumed in
-   fixed per-mover order, so the seeded stream stays a port spec. Spacing targets
-   are NOT recomputed here (decideOffBall owns them). See
+   space, screen→roll/pop, roll/pop hold) and applies the continuation target; for a
+   FREE mover it adds decision NOISE (randn()*OFFBALL_NOISE) to each scored
+   candidate, picks the best, COMMITS it (sets ob.state, resets ob.t, applies its
+   target). holdSpace wins → stay spacing. The pnr screener is just a mover here:
+   his screen carries the PNR_SCREEN_BONUS in decide, and once the pick is set he
+   commits to ROLL or POP by the deterministic shouldPop() utility (replacing the old
+   chance(G.screenPop) rng + bringup→screen→roll phase FSM). ALL off-ball rng lives
+   here, consumed in fixed per-mover order, so the seeded stream stays a port spec.
+   Spacing targets are NOT recomputed here (decideOffBall owns them). See
    docs/decide-pipeline-design.md. */
 function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
   const off = offTeam(),
     def = defTeam(),
-    h = hoop(),
-    tac = s.tacOff;
+    h = hoop();
   const dir = G.attackHoop === "R" ? -1 : 1;
-  G.actionT += DT;
   const sp0 = spotsFor(G.attackHoop);
   const bh = G.ball.holder;
   // while the ball is in flight (pass or shot) nobody has it: just hold spacing
   if (!bh) {
     off.forEach((p, i) => (p.target = sp0[i]));
     return;
-  }
-
-  if (tac.action === "pnr") {
-    // pick the eligible big with the highest screen tendency; fall back to role/off[4]
-    let screener = off.find((p) => p.role === "screener") || off[4];
-    let bestScreen = screener === bh ? -1 : effectiveTendencies(screener).screen;
-    for (const p of off) {
-      if (p === bh) continue;
-      const sc = effectiveTendencies(p).screen;
-      if (sc > bestScreen) {
-        bestScreen = sc;
-        screener = p;
-      }
-    }
-    if (G.actionPhase === "bringup") {
-      bh.target = { x: h.x + dir * 21, y: 25 };
-      // come UP to the level of the screen from the interior, not from the arc
-      screener.target = { x: h.x + dir * 13, y: 30 };
-      screener.dbgIntent = "pnr-bringup";
-      G.screen = { ball: bh, screener };
-      G.screenPop = undefined; // fresh roll/pop decision each possession
-      if (G.possClock > 1.6) {
-        G.actionPhase = "screen";
-      }
-    } else if (G.actionPhase === "screen") {
-      screener.target = { x: bh.x + dir * 1.5, y: bh.y - 5 };
-      screener.dbgIntent = "pnr-screen";
-      G.screen = { ball: bh, screener };
-      if (dist(screener, bh) < 5 && G.possClock > 2.6) {
-        G.actionPhase = "roll";
-      }
-    } else if (G.actionPhase === "roll") {
-      // Decide once per possession whether this is a pick-and-POP or a roll. A big
-      // who can shoot pops a share of the time (scaled by his shootThree tendency)
-      // and dives the rest — so a stretch big keeps both dimensions.
-      if (G.screenPop === undefined) {
-        const tend = effectiveTendencies(screener);
-        const canPop = screener.attr.three >= POP_THREE_RATING && tend.shootThree >= POP_THREE_TEND;
-        G.screenPop = canPop && chance(clamp(POP_SHARE_BASE + (tend.shootThree - 50) * POP_SHARE_SLOPE, 0.15, 0.8));
-      }
-      if (G.screenPop) {
-        // pop BEYOND the arc for a genuine three (not a long two)
-        screener.target = { x: h.x + dir * POP_OUT_DEPTH, y: 30 };
-        screener.dbgIntent = "pnr-pop";
-      } else {
-        // roll/short: reset to an inside spot — do NOT jog back out to the arc
-        screener.target = legalInsideHome(screener, h, dir);
-        screener.dbgIntent = "pnr-roll";
-      }
-      G.screen = { ball: bh, screener };
-    }
-    if (shouldClearLane(screener, h)) {
-      screener.target = laneClearSpot(screener, screener.target || screener, h, dir);
-      screener.dbgIntent = "laneclear";
-    }
-    if (screener.target) screener.target = clampInteriorTarget(screener.target);
-  } else {
-    G.screen = null;
   }
 
   // ----- apply off-ball decisions: commitment lifecycle + noise/select/commit -----
@@ -1132,7 +1146,7 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
   // target). holdSpace winning means stay spacing. All off-ball rng (the noise)
   // lives here, consumed in fixed per-mover order.
   {
-    const { perimeterSpots, homeOf, spots, movers } = offBallSetup(s, bh);
+    const { perimeterSpots, homeOf, spots, movers, pnrScreener } = offBallSetup(s, bh);
     const homeForMover = (p: Player): Point => {
       const ob = p.ob;
       let home = homeOf.get(p) || (ob ? spots[ob.spot] : spots[1]) || spots[1];
@@ -1178,19 +1192,70 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
       if (dec.screenState) {
         if (ob.screenTarget) {
           p.target = dec.to;
+          // never let the pick camp him in the paint — clear out before a 3-sec call.
+          if (shouldClearLane(p, h)) {
+            p.target = laneClearSpot(p, p.target, h, dir);
+            p.dbgIntent = "laneclear";
+          }
           screenCommitted = true;
+          const isPnr = p === pnrScreener;
+          // The pnr screener, once the screen has been set (handler drives off it,
+          // or the hold expires), transitions to ROLL or POP by utility — the dive
+          // or the lift that finishes the action. A generic (non-pnr) screener keeps
+          // the legacy cut-off-the-screen / clear-out behavior.
           if (G.driving) {
-            ob.state = "cut";
-            ob.t = 0;
-            ob.cutY = bh.y < 25 ? 19 : 31;
-            ob.screenTarget = null;
-            cutCommitted = true;
+            if (isPnr) {
+              const pop = shouldPop(p, def, h, dir);
+              ob.state = pop ? "pop" : "roll";
+              ob.t = 0;
+              ob.screenTarget = null;
+            } else {
+              ob.state = "cut";
+              ob.t = 0;
+              ob.cutY = bh.y < 25 ? 19 : 31;
+              ob.screenTarget = null;
+              cutCommitted = true;
+            }
           } else if (ob.t > SCREEN_HOLD_MAX) {
-            ob.state = "space";
-            ob.t = 0;
-            ob.screenTarget = null;
+            if (isPnr) {
+              const pop = shouldPop(p, def, h, dir);
+              ob.state = pop ? "pop" : "roll";
+              ob.t = 0;
+              ob.screenTarget = null;
+            } else {
+              ob.state = "space";
+              ob.t = 0;
+              ob.screenTarget = null;
+            }
           }
         } else {
+          ob.state = "space";
+          ob.t = 0;
+        }
+        continue;
+      }
+      // --- roll in progress (committed): screener dives to the rim ---
+      if (dec.rollState) {
+        p.target = dec.to;
+        p.dbgIntent = "pnr-roll";
+        if (shouldClearLane(p, h)) {
+          p.target = laneClearSpot(p, p.target, h, dir);
+          p.dbgIntent = "laneclear";
+        }
+        p.target = clampInteriorTarget(p.target);
+        // the roll ends when he clears the screen action; reset to spacing after a
+        // beat so the next possession (or a reset) re-evaluates him as a free mover.
+        if (ob.t > SCREEN_HOLD_MAX * 2) {
+          ob.state = "space";
+          ob.t = 0;
+        }
+        continue;
+      }
+      // --- pop in progress (committed): screener lifts beyond the arc ---
+      if (dec.popState) {
+        p.target = dec.to;
+        p.dbgIntent = "pnr-pop";
+        if (ob.t > SCREEN_HOLD_MAX * 2) {
           ob.state = "space";
           ob.t = 0;
         }
@@ -1244,6 +1309,7 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
         ob.state = "screen";
         ob.t = 0;
         ob.screenTarget = best.screenTo ?? best.to;
+        ob.screenedThisPoss = true; // pnr macro-intent re-screen bonus spent for the possession
         p.target = best.to;
         screenCommitted = true;
         continue;
@@ -1305,6 +1371,31 @@ function shouldClearLane(p: Player, h: Point): boolean {
 function laneClearSpot(p: Player, home: Point, h: Point, dir: number): Point {
   const side = p.y < 25 ? -1 : 1;
   return { x: Math.max(home.x, h.x + dir * 14.5), y: side < 0 ? 13 : 37 };
+}
+
+/* Roll-vs-pop UTILITY decision for the pnr screener once the screen is set
+   (replaces the old chance(G.screenPop) rng). DETERMINISTIC: pop utility is built
+   from the screener's three RATING, his (effective) shootThree tendency, and whether
+   the pop spot is open; roll has a flat baseline and wins for non-shooters. Returns
+   true to POP (lift beyond the arc), false to ROLL (dive to the rim). Reads only
+   frozen ratings/tendencies/geometry — no rng. */
+function shouldPop(screener: Player, def: Player[], h: Point, dir: number): boolean {
+  const tend = effectiveTendencies(screener);
+  // a screener who can't shoot it always rolls (gate matches the legacy canPop)
+  if (screener.attr.three < POP_THREE_RATING || tend.shootThree < POP_THREE_TEND) return false;
+  const popSpot = { x: h.x + dir * POP_OUT_DEPTH, y: 30 };
+  let popOpen = true;
+  for (const d of def) {
+    if (dist(d, popSpot) < POP_OPEN_RADIUS) {
+      popOpen = false;
+      break;
+    }
+  }
+  const popU =
+    (screener.attr.three - POP_RATING_PIVOT) * POP_RATING_SLOPE +
+    (tend.shootThree - POP_THREE_TEND) * POP_TEND_SLOPE +
+    (popOpen ? POP_OPEN_BONUS : 0);
+  return popU > ROLL_BASE_UTIL;
 }
 
 function legalInsideHome(p: Player, h: Point, dir: number): Point {
