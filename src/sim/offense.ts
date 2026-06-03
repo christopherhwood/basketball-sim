@@ -55,8 +55,22 @@ function isPaintEntryTarget(pt: Point, h: Point): boolean {
   return hoopDepth(pt, h) <= PASS_RISK_ENTRY_DEPTH && Math.abs(pt.y - h.y) <= PASS_RISK_ENTRY_WIDTH;
 }
 
-export function passRouteRisk(from: Point, to: Point, h: Point): number {
-  const d = dist(from, to);
+export function passRouteRisk(from: Point, to: Point, h: Point, toVel?: { vx: number; vy: number }): number {
+  const baseD = dist(from, to);
+  // A receiver moving AWAY from the passer effectively lengthens the feed — he'll
+  // be farther by the time a ~31 ft/s pass reaches him — while a man coming to meet
+  // it shortens it. Fold his closing speed into the pass length so the existing
+  // distance/cross-court risk reflects where he'll actually be; the passer's vision
+  // (passSelectionPenalty) then decides how much to heed it. A live read of the
+  // floor, not a flat rule: an open man drifting to the far corner becomes a long,
+  // risky feed on his own, so the handler looks elsewhere more often than not.
+  let d = baseD;
+  if (toVel) {
+    const ax = to.x - from.x,
+      ay = to.y - from.y;
+    const awaySpeed = (toVel.vx * ax + toVel.vy * ay) / (baseD || 1); // ft/s away (negative = toward the ball)
+    d = Math.max(0, baseD * (1 + awaySpeed / PASS_FEED_SPEED));
+  }
   const lateral = Math.abs(from.y - to.y);
   const fromDepth = hoopDepth(from, h);
   const longRisk = clamp((d - PASS_RISK_LONG_START) / PASS_RISK_LONG_RANGE, 0, 1) * 0.45;
@@ -77,8 +91,8 @@ export function passRouteRisk(from: Point, to: Point, h: Point): number {
   return clamp(longRisk + crossCourtRisk + entryRisk, 0, 2);
 }
 
-export function passSelectionPenalty(from: Player, to: Point, h: Point): number {
-  const routeRisk = passRouteRisk(from, to, h);
+export function passSelectionPenalty(from: Player, to: Point, h: Point, toVel?: { vx: number; vy: number }): number {
+  const routeRisk = passRouteRisk(from, to, h, toVel);
   const awareness = clamp((from.attr.iq - 45) / 35, 0.2, 1.15);
   const skillComfort = clamp((from.attr.pass - 50) / 40, 0, 1);
   return routeRisk * (0.55 + awareness * 0.85) * (1.05 - skillComfort * 0.25);
@@ -137,6 +151,7 @@ const PASS_RISK_ENTRY_DEPTH = 13.75;
 const PASS_RISK_ENTRY_FROM_DEPTH = 12;
 const PASS_RISK_ENTRY_WIDTH = 8;
 const PASS_RISK_CORNER_Y = 8;
+const PASS_FEED_SPEED = 31; // ft/s a chest pass travels (matches startPass) — converts receiver closing speed into effective pass length
 
 // Drive-read: speed/handle edge and defender positioning bonuses
 const DRIVE_SPEED_SLOPE = 1 / 28; // per point of (handler speed - defender speed)
@@ -314,6 +329,9 @@ const CUTOFF_IQ_W = 0.004; // per point of (defender iq - handler iq)
 const CUTOFF_DRIVE_TEND_W = 0.013; // per point of handler driveRim tendency above 50: a rim-attacking team gets downhill / finishes getting there more (lowers the contain chance)
 const CUTOFF_P_MIN = 0.1; // elite handlers still get walled occasionally
 const CUTOFF_P_MAX = 0.85; // even weak handlers split a set defense sometimes
+const GUARD_RANGE = 9; // ft: a goal-side defender within this is guarding the ball (matches contestOf's contest range)
+const GUARD_FADE = 4; // ft: a defender within (GUARD_RANGE - GUARD_FADE) = 5 ft is fully guarding; containment fades to 0 by GUARD_RANGE
+const GUARD_GOALSIDE_SLACK = 1; // ft: defender counts as goal-side if he's at least roughly even with the handler toward the rim
 const CUTOFF_TO_BASE = 0.012; // base turnover chance once a drive is actually cut off (mostly the handler just picks it up)
 const CUTOFF_TO_SPEED_SLOPE = 0.002; // faster into the wall → a bit more likely to charge/lose it
 const CUTOFF_TO_HANDLE_SLOPE = 1 / 260; // a good handle reduces the cutoff turnover
@@ -2008,7 +2026,7 @@ function startPass(from: Player, to: Player): void {
   // rather than a blur. 0.32 ticks/ft → dist/(0.32*0.1) ≈ 31 ft/s; min 0.3s.
   G.ball.passDur = Math.max(3, Math.round(dist(from, to) * 0.28));
   const def = defTeam();
-  const routeRisk = passRouteRisk(from, to, hoop());
+  const routeRisk = passRouteRisk(from, to, hoop(), to);
 
   // bad-pass / handling turnover: the pass itself is errant or deflected.
   // Scales with the passer's (low) pass attribute and with defensive pressure
@@ -2254,6 +2272,29 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     if (laneOpen) driveU += OPEN_LANE_BONUS;
   }
 
+  // A drive is only worth as much as the handler's own read that he can beat the
+  // man guarding him. Any defender goal-side and within guarding range can slide to
+  // wall a straight drive — the TIGHTER he's guarded, the surer the containment —
+  // and the matchup (his handle/speed/iq vs the defender's perimD/speed/iq, the same
+  // read the cutoff resolves) sets how often he actually wins it. So the drive's
+  // value is scaled by guarding × how-often-contained: an even/losing matchup under
+  // real pressure collapses it and he sets up / passes / picks up / calls a screen;
+  // a clear edge — OR his man sagging off (out of guarding range) — leaves it intact
+  // so he attacks the space. This is what keeps him from barreling at a set man to
+  // start a possession; no distance rule — in the open floor nobody is there to guard.
+  if (driveU > 0 && onBall) {
+    const guarding = clamp((GUARD_RANGE - dist(onBall, bh)) / GUARD_FADE, 0, 1); // 1 = within reach, fading to 0 as he sags off
+    const goalSide = dist(onBall, h) <= dh + GUARD_GOALSIDE_SLACK; // between the handler and the rim
+    if (guarding > 0 && goalSide) {
+      const edge =
+        (onBall.attr.perimD - handleOf(bh)) * CUTOFF_PERIMD_W +
+        (onBall.attr.speed - bh.attr.speed) * CUTOFF_SPEED_W +
+        (onBall.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
+      const contained = clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX);
+      driveU *= 1 - contained * guarding; // he drives as often as he can beat the man who's actually on him
+    }
+  }
+
   if (tac.shotSel === "rim") driveU += 0.25;
   if (tac.shotSel === "three") driveU -= 0.2;
   driveU *= tendencyFactor(tendencies.driveRim) * tuning.decisions.driveUtilityScale;
@@ -2306,8 +2347,11 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
       rollFeedBonus = ROLL_FEED_BONUS * clamp(0.5 + to, 0.5, 1.5);
     }
 
+    // passSelectionPenalty reads the route AND the receiver's motion: a man
+    // running away from the ball reads as a longer, riskier feed, so a sharp
+    // passer passes it up more often than not (and a low-IQ one less so).
     const pu = to * 0.9 + tev * 0.5 + advance + kickBonus + postFeedBonus + handoffBonus + rollFeedBonus
-      - passSelectionPenalty(bh, t, h);
+      - passSelectionPenalty(bh, t, h, t);
     if (pu > bestPU) {
       bestPU = pu;
       bestPass = t;
