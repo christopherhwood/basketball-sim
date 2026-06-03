@@ -298,8 +298,6 @@ const HOLD_GO_THRESHOLD = 1.4; // max(shootU,driveU) below this = no compelling 
 const HOLD_PASS_QUALITY = 1.0; // bestPU below this = no real look yet → consider holding
 const HOLD_MIN_CLOCK = 9; // never hold once the shot clock is under this (urgency takes over)
 const HOLD_MAX_T = 1.0; // cap on cumulative hold/probe time per possession (short beat of motion, then take the best look)
-const HOLD_SCREEN_DELAY = 0.8; // seconds of holding before calling for a ball screen (let cutters move first)
-const HOLD_SCREEN_CHANCE = 0.4; // when holding past the delay, chance to call a screen vs. dribble out/reset
 const HOLD_RESET_CLOCK_HI = 15; // a guard/playmaker resets (dribbles back out) inside this shot-clock window
 const HOLD_RESET_CLOCK_LO = 11;
 const HOLD_CUT_CHANCE = 0.05; // per-decision chance a weak-side man makes a basket cut during a hold
@@ -313,6 +311,7 @@ const CUTOFF_BASE_P = 0.5;
 const CUTOFF_PERIMD_W = 0.012; // per point of (defender perimD - handler handle)
 const CUTOFF_SPEED_W = 0.01; // per point of (defender speed - handler speed)
 const CUTOFF_IQ_W = 0.004; // per point of (defender iq - handler iq)
+const CUTOFF_DRIVE_TEND_W = 0.013; // per point of handler driveRim tendency above 50: a rim-attacking team gets downhill / finishes getting there more (lowers the contain chance)
 const CUTOFF_P_MIN = 0.1; // elite handlers still get walled occasionally
 const CUTOFF_P_MAX = 0.85; // even weak handlers split a set defense sometimes
 const CUTOFF_TO_BASE = 0.012; // base turnover chance once a drive is actually cut off (mostly the handler just picks it up)
@@ -321,41 +320,64 @@ const CUTOFF_TO_HANDLE_SLOPE = 1 / 260; // a good handle reduces the cutoff turn
 const CUTOFF_TO_CAP = 0.04; // ceiling on cutoff turnover chance (cutoff strips/charges are rare; bad-pass TOs live elsewhere)
 const CUTOFF_CHARGE_SHARE = 0.1; // of cutoff turnovers, share that are charges (rare, dead ball)
 const CUTOFF_TRAVEL_SHARE = 0.12; // share that are travels (dead ball); the rest are live strips
-const SCREEN_HOLD_MAX = 1.5; // seconds: max time to hold a screen before clearing out
 // If the handler never USES the pick (resets out), the screen expires after a
 // longer hold and the screener RELOCATES/spaces — it does NOT roll/pop. Roll/pop
 // fires only on a SET screen the handler engaged (ob.screenSet && ob.screenUsed).
-const SCREEN_HOLD_EXPIRE = 2.6; // seconds: an unused set screen gives up and spaces
-const SCREEN_SET_DIST = 1.5; // ft behind the on-ball defender for screen position
+const SCREEN_HOLD_EXPIRE_BASE = 2.6; // base seconds an unused set screen is held before the screener gives up; scaled per screener (screenHoldExpire)
 // Wait-for-the-pick: a screener heading to the handler's defender but not yet
 // arrived (within this range of the on-ball defender) is "incoming" — the handler
 // holds for it instead of attacking early, unless he already has a strong look.
 const SCREEN_WAIT_RANGE = 15; // ft from the on-ball defender within which an approaching screen counts as incoming
 const SCREEN_MIN_HANDLER_DIST = 14; // ft from rim: only call a ball screen for a perimeter handler (never a man on the block)
 const SCREEN_MAX_HANDLER_DIST = 30; // ft from rim: above this the handler is too far out to call a useful ball screen
-const SCREEN_PLANT_OFFSET = 2.6; // ft beside the handler the pick spot sits (inside the SET range, so it lands)
-const SCREEN_CALL_EXPIRE = 3.0; // s a screen call lasts before the handler gives up and attacks on his own
+const SCREEN_PLANT_OFFSET = 2.0; // ft to the SIDE the pick spot sits beside the defender — INSIDE SCREEN_CONTACT_DIST so the screener actually bodies/impedes him (a real pick), not just sets positionally
+const SCREEN_SIDE_EDGE = 4; // ft: the other side must be at least this much more open for the screener to switch which side he sets the pick (hysteresis so the choice doesn't oscillate)
+const SCREEN_BODY_CLEAR = 3.0; // ft to the screener's outside shoulder (away from the on-ball defender) the handler aims when turning the corner — lateral component of the corner-turn
+const SCREEN_CORNER_STEP = 4.0; // ft toward the rim past the screener the handler aims — rimward component of the corner-turn (so he rounds the pick, then attacks)
+const SCREEN_TOWARD_HOOP = 3.2; // ft toward the basket the pick sits when there's no clear on-ball man
+const SCREEN_TOWARD_MAX = 6; // ft: cap the pick's depth at the defender so a sagging man doesn't drag it into the paint
+const SCREEN_LANE_DISCOUNT = 0.3; // off a SET pick, lane congestion bites only this fraction (the handler attacks downhill, his man screened)
+const SCREEN_CALL_EXPIRE_BASE = 3.0; // base seconds a screen call lasts; scaled per handler (screenCallExpire)
 const SCREEN_WAIT_GREAT = 2.7; // only a truly elite immediate look skips the called pick; otherwise the handler waits for it
 const SCREEN_PICK_DIST_W = 1.4; // per ft from the handler: penalize picking a far screener
 const SCREEN_PICK_ROLE_BONUS = 12; // the designated screener role is the natural pick
 
-/* The shared pick SPOT: just beside the handler (perpendicular to his line to the
-   rim), on the side the screener is already on — the rendezvous both the screener
-   and the handler reference. Fixed when the call is made (the handler then holds
-   near it), so the screener runs to a stable point instead of chasing the defender. */
-function pickSpot(handler: Player, screener: Player, h: Point): Point {
-  const ux = handler.x - h.x,
-    uy = handler.y - h.y;
-  const ul = Math.hypot(ux, uy) || 1;
-  let perpX = -uy / ul,
-    perpY = ux / ul;
-  if ((screener.y - handler.y) * perpY + (screener.x - handler.x) * perpX < 0) {
-    perpX = -perpX;
-    perpY = -perpY;
-  }
+/* The screener's OWN read of where to set the pick — called by the screener each tick
+   from his off-ball decider with LIVE positions (no central stored spot). He anchors on
+   the on-ball defender (between the handler and the rim, containing him) and plants just
+   beside him, off the handler's attack line, so he makes body contact and impedes him —
+   the contact is what creates the separation the handler drives off. Expressed relative
+   to the HANDLER so it tracks the play smoothly instead of chasing the defender's exact
+   moving point. No clear on-ball man → aim a few feet toward the rim. */
+function screenAnchor(handler: Player, screener: Player, h: Point, onBallDef: Player | null, def: Player[]): Point {
+  const dx = onBallDef ? onBallDef.x - handler.x : h.x - handler.x;
+  const dy = onBallDef ? onBallDef.y - handler.y : h.y - handler.y;
+  const dl = Math.hypot(dx, dy) || 1;
+  const tx = dx / dl,
+    ty = dy / dl;
+  const depth = onBallDef ? clamp(dl, 2, SCREEN_TOWARD_MAX) : SCREEN_TOWARD_HOOP;
+  const perpX = -ty,
+    perpY = tx;
+  // The screener's DECISION: which side to set the pick. He reads the floor and angles
+  // it to spring the handler toward the more OPEN side (the defender chasing him that way
+  // runs into the pick). Openness of a side = how far the nearest help defender is from
+  // where the handler would attack on it. He keeps the side he's already on unless the
+  // other is clearly more open (a real advantage), so the choice is stable, not jittery.
+  const curSide = (screener.y - handler.y) * perpY + (screener.x - handler.x) * perpX >= 0 ? 1 : -1;
+  const openness = (sgn: number): number => {
+    const ax = handler.x + tx * depth + sgn * perpX * 4;
+    const ay = handler.y + ty * depth + sgn * perpY * 4;
+    let nearest = 30;
+    for (const d of def) {
+      if (d === onBallDef) continue;
+      nearest = Math.min(nearest, Math.hypot(d.x - ax, d.y - ay));
+    }
+    return nearest;
+  };
+  const side = openness(-curSide) > openness(curSide) + SCREEN_SIDE_EDGE ? -curSide : curSide;
   return {
-    x: clamp(handler.x + perpX * SCREEN_PLANT_OFFSET, 3, COURT_L - 3),
-    y: clamp(handler.y + perpY * SCREEN_PLANT_OFFSET, 3, 47),
+    x: clamp(handler.x + tx * depth + side * perpX * SCREEN_PLANT_OFFSET, 3, COURT_L - 3),
+    y: clamp(handler.y + ty * depth + side * perpY * SCREEN_PLANT_OFFSET, 3, 47),
   };
 }
 
@@ -381,60 +403,110 @@ function pickScreener(movers: Player[], bh: Player, h: Point): Player | null {
   return best;
 }
 
+/* How long the HANDLER runs a called pick before giving up and attacking on his own —
+   his patience, scaled by IQ (a heady guard milks the action; a low-IQ one bails early).
+   Player-dependent, not a single global timer for everyone. */
+function screenCallExpire(handler: Player): number {
+  return SCREEN_CALL_EXPIRE_BASE * (0.7 + (handler.attr.iq / 100) * 0.6);
+}
+
+/* How long the SCREENER holds an unused set pick before relocating — scaled by his
+   willingness to screen (screen tendency) and IQ; a willing, heady big stays on the body
+   longer, a reluctant one bails sooner. */
+function screenHoldExpire(screener: Player): number {
+  const will = (effectiveTendencies(screener).screen + screener.attr.iq) / 2;
+  return SCREEN_HOLD_EXPIRE_BASE * (0.7 + (will / 100) * 0.6);
+}
+
 /* ---------- PnR SCREEN CALL (shared coordination) ----------
-   The helios give-and-go model: a CALL (handler picks a screener + a fixed pick spot)
-   + a PERSISTENT intention (the screener commits to running to the spot and planting,
-   NOT re-decided each tick) + the handler holding until it sets. Run each tick before
-   the off-ball deciders. Creates the call when a perimeter handler is running a PnR,
-   keeps the chosen screener committed to the spot, and clears it when the pick is
-   used / expires / the possession changes. This is the single owner of the ball
-   screen's lifecycle (off-ball deciders no longer spawn screens on their own). */
+   A CALL is pure coordination: the handler picks WHO screens for him; the chosen
+   screener then decides WHERE to plant himself, each tick, by anchoring on the live
+   on-ball defender in his own off-ball decider (screenAnchor). updateScreenCall runs
+   each tick before the deciders: it creates the call when a perimeter handler is
+   running a PnR, keeps the screener flagged as the committed screener, and clears the
+   call when the pick is used / expires / the possession changes. No geometry here. */
 export function updateScreenCall(): void {
-  const bh = G.ball.holder;
-  const h = hoop();
   const call = G.screenCall;
-  if (call) {
-    const ob = call.screener.ob;
-    const handlerChanged = bh !== call.handler || G.ball.state !== "held";
-    const expired = G.possClock - call.startClock > SCREEN_CALL_EXPIRE;
-    const usedUp = !!ob?.screenUsed; // pick was used → screener rolls/pops, call done
-    if (handlerChanged || expired || usedUp) {
-      // unused/expired pick → release the screener back to spacing (no phantom roll)
-      if (ob && ob.state === "screen" && !ob.screenSet) {
-        ob.state = "space";
-        ob.t = 0;
-        ob.screenTarget = null;
-      }
-      G.screenCall = null;
-      return;
+  if (!call) return; // a call is CREATED by the handler's decision (applyScreenDecision, on wantsScreen)
+  const bh = G.ball.holder;
+  const ob = call.screener.ob;
+  const handlerChanged = bh !== call.handler || G.ball.state !== "held";
+  const expired = G.possClock - call.startClock > screenCallExpire(call.handler);
+  const usedUp = !!ob?.screenUsed; // pick was used → screener rolls/pops, call done
+  if (handlerChanged || expired || usedUp) {
+    // unused/expired pick → release the screener back to spacing (no phantom roll)
+    if (ob && ob.state === "screen" && !ob.screenSet) {
+      ob.state = "space";
+      ob.t = 0;
+      ob.screenTarget = null;
     }
-    // keep the screener committed to the fixed pick spot (the persistent intention)
-    if (ob) {
-      ob.state = "screen";
-      ob.screenTarget = call.spot;
-      ob.screenedThisPoss = true;
-    }
+    G.screenCall = null;
     return;
   }
-  // create a call: a PnR, with the ball HELD by a perimeter handler, past the bringup
-  if (!bh || G.ball.state !== "held") return;
-  if (tacFor(G.offense).action !== "pnr") return;
+  // Keep the screener flagged as the committed screener — WHERE he goes is his own
+  // per-tick read (screenAnchor on the live defender), computed in his off-ball decider.
+  if (ob) {
+    ob.state = "screen";
+    ob.screenedThisPoss = true;
+  }
+}
+
+/* The handler CALLS for a ball screen — HIS decision to initiate the PnR (a point guard
+   waving a big up for a pick), not a play forced on him. He calls it when he's running a
+   PnR, out on the perimeter with his dribble alive and time on the clock. Picks an able,
+   close screener; the screener decides where to set it. Returns true if a call was made;
+   the handler can still wave it off (rejectScreen) if his read changes before it sets. */
+export function callScreen(bh: Player): boolean {
+  if (G.ball.state !== "held") return false;
+  if (tacFor(G.offense).action !== "pnr") return false;
+  const h = hoop();
   const handlerDist = dist(bh, h);
-  if (handlerDist <= SCREEN_MIN_HANDLER_DIST || handlerDist > SCREEN_MAX_HANDLER_DIST) return;
-  if (G.possClock < PNR_BRINGUP_DELAY || G.shotClock <= HOLD_MIN_CLOCK) return;
+  if (handlerDist <= SCREEN_MIN_HANDLER_DIST || handlerDist > SCREEN_MAX_HANDLER_DIST) return false;
+  if (G.possClock < PNR_BRINGUP_DELAY || G.shotClock <= HOLD_MIN_CLOCK) return false;
   const off = offTeam();
-  if (off.some((o) => o.ob?.screenedThisPoss)) return; // one ball screen per possession
+  if (off.some((o) => o.ob?.screenedThisPoss)) return false; // one ball screen / possession
   const screener = pickScreener(
     off.filter((o) => o !== bh),
     bh,
     h,
   );
-  if (!screener || !screener.ob) return;
-  const spot = pickSpot(bh, screener, h);
-  G.screenCall = { screener, handler: bh, spot, startClock: G.possClock };
+  if (!screener || !screener.ob) return false;
+  G.screenCall = { screener, handler: bh, startClock: G.possClock };
   screener.ob.state = "screen";
-  screener.ob.screenTarget = spot;
   screener.ob.t = 0;
+  return true;
+}
+
+/* The handler REJECTS / waves off a called screen before it sets — he changed his
+   mind (saw a better look or chose to attack). Disperse the screener back to spacing
+   and clear the call. Mark the screener screenedThisPoss so updateScreenCall doesn't
+   immediately re-call the same pick — a wave-off spends the possession's one ball
+   screen (no create→reject churn while the great look persists). */
+export function rejectScreen(): void {
+  const call = G.screenCall;
+  if (!call) return;
+  const ob = call.screener.ob;
+  if (ob) ob.screenedThisPoss = true;
+  if (ob && ob.state === "screen" && !ob.screenSet) {
+    ob.state = "space";
+    ob.t = 0;
+    ob.screenTarget = null;
+  }
+  G.screenCall = null;
+}
+
+/* The handler's screen DECISION, from his on-ball read (BallDecision). Runs after
+   decideOnBall but BEFORE the off-ball deciders, so the chosen screener reacts the SAME
+   tick. He CALLS for a pick when he's stuck (wantsScreen) and none is live; he WAVES OFF
+   a called pick that hasn't set once his read changes (a look opened up → wantsScreen
+   flips false). This is where ball screens become deliberate rather than automatic. */
+export function applyScreenDecision(ball: BallDecision | null): void {
+  if (!ball) return;
+  if (ball.wantsScreen && !G.screenCall) {
+    callScreen(ball.who);
+  } else if (ball.screenWaveOff && G.screenCall?.handler === ball.who && !G.screenCall.screener.ob?.screenSet) {
+    rejectScreen();
+  }
 }
 
 /* ---------- OFF-BALL UTILITY DECIDER ----------
@@ -681,7 +753,8 @@ export function resolveOffense(
           const edge =
             (cutoffDef.attr.perimD - handleOf(bh)) * CUTOFF_PERIMD_W +
             (cutoffDef.attr.speed - bh.attr.speed) * CUTOFF_SPEED_W +
-            (cutoffDef.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
+            (cutoffDef.attr.iq - bh.attr.iq) * CUTOFF_IQ_W -
+            (effectiveTendencies(bh).driveRim - 50) * CUTOFF_DRIVE_TEND_W;
           G.driveBeaten = !chance(clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX));
         }
         contained = !G.driveBeaten;
@@ -729,18 +802,16 @@ export function resolveOffense(
 
   const noGoodAttack = Math.max(shootU, driveU) < HOLD_GO_THRESHOLD;
   const noGoodPass = bestPU < HOLD_PASS_QUALITY;
+  const haveGreatStandstillShot = shootU >= SCREEN_WAIT_GREAT;
   // Wait for the called pick (helios give-and-go model): while a screen CALL is live
-  // for this handler and the pick hasn't physically SET yet, the handler HOLDS STILL
-  // near the pick spot so the screener can rendezvous and plant — he doesn't drive
-  // off early. Once it sets he stops waiting and attacks off the real separation;
-  // skipped if he already has a GREAT look he should just take.
+  // for this handler and the pick hasn't SET yet, he HOLDS STILL near the pick spot so
+  // the screener can rendezvous and plant. Once it sets he attacks off the separation.
   const call = G.screenCall;
-  const haveGreatLook = Math.max(shootU, driveU) >= SCREEN_WAIT_GREAT;
   const waitForScreen =
     !!call &&
     call.handler === bh &&
     !call.screener.ob?.screenSet &&
-    !haveGreatLook &&
+    !haveGreatStandstillShot &&
     best !== postU &&
     G.shotClock > HOLD_MIN_CLOCK;
   const wantHold =
@@ -775,7 +846,34 @@ export function resolveOffense(
     if (!G.driving) G.driveBeaten = undefined; // fresh drive → re-roll the matchup next tick
     G.driving = true;
     recordDecision("drive");
-    bh.target = toward;
+    // Attack AROUND the pick, not straight at the rim. If a teammate is setting a screen
+    // between the handler and the basket, the handler turns the corner: he aims at the
+    // screener's OUTSIDE shoulder (lateral, the side away from his on-ball defender) AND a
+    // step toward the rim — a real two-component corner, so his path visibly bends around
+    // the screener and rubs the chasing defender into him. A waypoint blended mostly
+    // rimward (the old version) bent the path too little to read. Otherwise: straight downhill.
+    const screener = off.find((o) => o !== bh && o.ob?.state === "screen");
+    if (screener) {
+      const onBall = def.find((d) => d.assign === bh) ?? nearestDef(bh, def).d;
+      // lateral unit: from the on-ball defender out to the screener (his outside shoulder)
+      let lx = screener.x - (onBall?.x ?? bh.x);
+      let ly = screener.y - (onBall?.y ?? bh.y);
+      const ll = Math.hypot(lx, ly) || 1;
+      lx /= ll;
+      ly /= ll;
+      // rimward unit: handler toward the basket
+      let rx = h.x - bh.x;
+      let ry = h.y - bh.y;
+      const rl = Math.hypot(rx, ry) || 1;
+      rx /= rl;
+      ry /= rl;
+      bh.target = {
+        x: clamp(screener.x + lx * SCREEN_BODY_CLEAR + rx * SCREEN_CORNER_STEP, 3, COURT_L - 3),
+        y: clamp(screener.y + ly * SCREEN_BODY_CLEAR + ry * SCREEN_CORNER_STEP, 3, 47),
+      };
+    } else {
+      bh.target = toward;
+    }
   } else if (bestPass) {
     G.driving = false;
     recordDecision("pass");
@@ -858,46 +956,22 @@ function perimeterDribbleTarget(bh: Player, def: Player[], h: Point, dir: number
 }
 
 /* Patience hold: with no compelling attack, the handler keeps his dribble and
-   either (a) dribbles out / around the top to find a new angle — the natural
-   reset a guard makes around 12-15s on the clock — or (b) calls a teammate over
-   for a ball screen. Meanwhile a weak-side man may cut. The next decision cycle
-   reacts to whatever opens, so we never force a bad pass. */
+   dribbles out / around the top to find a new angle — the natural reset a guard makes
+   around 12-15s on the clock. Meanwhile a weak-side man may cut. The next decision
+   cycle reacts to whatever opens, so we never force a bad pass. Ball SCREENS are NOT
+   spawned here: a pick is the handler's own call (callScreen / applyScreenDecision),
+   the single owner of the screen — spawning a second one here re-picked a screener who
+   had already rolled (the duplicate-roll glitch) and bypassed the one-per-possession
+   guard. */
 function holdAndProbe(bh: Player, off: Player[], def: Player[], h: Point): void {
   const dir = G.attackHoop === "R" ? -1 : 1;
-  const onBall = def.find((d) => d.assign === bh) || nearestDef(bh, def).d;
-  const noLane = !isLaneClear(bh, def, h);
-  const held = G.holdT ?? 0;
 
   // A guard/primary playmaker resets the offense around 12-15s: dribble back out
   // toward the top to reset spacing and start a second action.
   const resetWindow = G.shotClock <= HOLD_RESET_CLOCK_HI && G.shotClock >= HOLD_RESET_CLOCK_LO;
   const playmaker = bh.role === "handler" || bh.attr.pass >= 70;
 
-  // Decide between calling a screen and dribbling out. Screens only after a beat
-  // of motion and when there's genuinely no lane; otherwise just move the ball.
-  const callScreen = noLane && held > HOLD_SCREEN_DELAY && !resetWindow && chance(HOLD_SCREEN_CHANCE);
-
-  let screener: Player | null = null;
-  if (callScreen) {
-    let bestScreen = -1;
-    for (const p of off) {
-      if (p === bh || p.ob?.state === "cut") continue;
-      const sc = effectiveTendencies(p).screen;
-      if (sc > bestScreen) {
-        bestScreen = sc;
-        screener = p;
-      }
-    }
-    if (screener && screener.ob && onBall) {
-      const ddx = onBall.x - bh.x,
-        ddy = onBall.y - bh.y,
-        dd = Math.hypot(ddx, ddy) || 1;
-      screener.ob.state = "screen";
-      screener.ob.t = 0;
-      screener.ob.screenTarget = { x: onBall.x + (ddx / dd) * SCREEN_SET_DIST, y: clamp(onBall.y + (ddy / dd) * SCREEN_SET_DIST, 4, 46) };
-    }
-    bh.target = { x: bh.x, y: bh.y }; // hold position for the screen to arrive
-  } else if (resetWindow && playmaker) {
+  if (resetWindow && playmaker) {
     // reset: dribble back out to the top of the key
     bh.target = { x: lerp(bh.x, h.x + dir * 24, 0.45), y: lerp(bh.y, 25, 0.4) };
   } else {
@@ -908,7 +982,7 @@ function holdAndProbe(bh: Player, off: Player[], def: Player[], h: Point): void 
   // occasional basket cut from a weak-side perimeter man to create movement
   if (chance(HOLD_CUT_CHANCE)) {
     for (const p of off) {
-      if (p === bh || p === screener || isInsidePlayer(p) || !p.ob || p.ob.state !== "space") continue;
+      if (p === bh || isInsidePlayer(p) || !p.ob || p.ob.state !== "space") continue;
       const cf = tendencyFactor(effectiveTendencies(p).driveRim);
       if (chance(cf * 0.5)) {
         p.ob.state = "cut";
@@ -1229,11 +1303,11 @@ export function decideOffBall(s: Snapshot): OffBallDecision[] {
     if (ob.state === "screen") {
       dec.committed = true;
       dec.screenState = true;
-      if (ob.screenTarget) {
-        dec.to = ob.screenTarget;
-        reserved.push({ p, point: dec.to, inside: true });
-      }
-      // (no screenTarget → resolve drops to roll/pop; spacing target stays = home)
+      // The screener decides WHERE to plant himself: beside the LIVE on-ball defender
+      // (read from this tick's positions), on the side that springs the handler to the
+      // more open lane. Not a central spot — tracks the play, never goes stale.
+      dec.to = screenAnchor(bh, p, h, onBallDef, def);
+      reserved.push({ p, point: dec.to, inside: true });
       out.push(dec);
       continue;
     }
@@ -1562,47 +1636,48 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
       }
       // --- screen in progress (committed) ---
       if (dec.screenState) {
-        if (ob.screenTarget) {
-          p.target = dec.to;
-          // never let the pick camp him in the paint — clear out before a 3-sec call.
-          if (shouldClearLane(p, h)) {
-            p.target = laneClearSpot(p, p.target, h, dir);
-            p.dbgIntent = "laneclear";
-          }
-          screenCommitted = true;
-          const isPnr = p === pnrScreener;
-          // Roll/pop fires ONLY when the screen was actually SET (physical contact
-          // with the on-ball defender — ob.screenSet, written by applyScreenContact)
-          // AND the handler ENGAGED it (drove off it / pulled ahead — ob.screenUsed).
-          // No more firing on the bare global G.driving or a bare timer. If the
-          // handler never uses the pick, the screen expires (SCREEN_HOLD_EXPIRE) and
-          // the screener RELOCATES/spaces rather than rolling into nothing.
-          const setAndUsed = !!ob.screenSet && !!ob.screenUsed;
-          if (setAndUsed) {
-            if (isPnr) {
-              const pop = shouldPop(p, def, h, dir);
-              ob.state = pop ? "pop" : "roll";
-              ob.t = 0;
-              ob.screenTarget = null;
-            } else {
-              ob.state = "cut";
-              ob.t = 0;
-              ob.cutY = bh.y < 25 ? 19 : 31;
-              ob.screenTarget = null;
-              cutCommitted = true;
-            }
-          } else if (G.screenCall?.screener !== p && ob.t > SCREEN_HOLD_EXPIRE) {
-            // unused pick with NO active call (defensive): give up and space out. A
-            // CALLED screener is never expired here — updateScreenCall owns the
-            // lifecycle (its SCREEN_CALL_EXPIRE), so resolveOffBall doesn't fight it
-            // by yanking him to "space" mid-approach (the bug that killed set-rate).
-            ob.state = "space";
+        p.target = dec.to;
+        ob.screenTarget = dec.to; // his live anchor this tick (activeScreen + set detection read it)
+        // never let the pick camp him in the paint — clear out before a 3-sec call.
+        if (shouldClearLane(p, h)) {
+          p.target = laneClearSpot(p, p.target, h, dir);
+          p.dbgIntent = "laneclear";
+        }
+        screenCommitted = true;
+        const isPnr = p === pnrScreener;
+        // Roll/pop fires ONLY when the screen was actually SET (physical contact
+        // with the on-ball defender — ob.screenSet, written by applyScreenContact)
+        // AND the handler ENGAGED it (drove off it / pulled ahead — ob.screenUsed).
+        // No more firing on the bare global G.driving or a bare timer. If the
+        // handler never uses the pick, the screen expires (SCREEN_HOLD_EXPIRE) and
+        // the screener RELOCATES/spaces rather than rolling into nothing.
+        const setAndUsed = !!ob.screenSet && !!ob.screenUsed;
+        if (setAndUsed) {
+          // CONSUME the set+used into ONE roll/pop/cut — clear the flags so the
+          // screener can't immediately re-trigger another roll off the same screen
+          // (one roll/pop per pick). A new pick must be set + used to roll again.
+          ob.screenSet = false;
+          ob.screenUsed = false;
+          if (isPnr) {
+            const pop = shouldPop(p, def, h, dir);
+            ob.state = pop ? "pop" : "roll";
             ob.t = 0;
             ob.screenTarget = null;
+          } else {
+            ob.state = "cut";
+            ob.t = 0;
+            ob.cutY = bh.y < 25 ? 19 : 31;
+            ob.screenTarget = null;
+            cutCommitted = true;
           }
-        } else {
+        } else if (G.screenCall?.screener !== p && ob.t > screenHoldExpire(p)) {
+          // unused pick with NO active call (defensive): give up and space out. A
+          // CALLED screener is never expired here — updateScreenCall owns the
+          // lifecycle (its SCREEN_CALL_EXPIRE), so resolveOffBall doesn't fight it
+          // by yanking him to "space" mid-approach (the bug that killed set-rate).
           ob.state = "space";
           ob.t = 0;
+          ob.screenTarget = null;
         }
         continue;
       }
@@ -1610,14 +1685,25 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
       if (dec.rollState) {
         p.target = dec.to;
         p.dbgIntent = "pnr-roll";
+        // Re-evaluate the roll (the cut logic's sibling): if he's diving into the lane
+        // the ball-handler is ATTACKING, peel to the OPEN side of the rim (opposite his
+        // attack) rather than running into him. He stays a rim/dump-off threat — unlike
+        // a cutter who vacates to the corner — just on the side that doesn't clog.
+        if (G.driving && (p.y < 25) === (bh.y < 25)) {
+          p.target = { x: h.x + dir * 3, y: bh.y < 25 ? 32 : 18 };
+          p.dbgIntent = "roll-open";
+        }
         if (shouldClearLane(p, h)) {
           p.target = laneClearSpot(p, p.target, h, dir);
           p.dbgIntent = "laneclear";
         }
         p.target = clampInteriorTarget(p.target);
-        // the roll ends when he clears the screen action; reset to spacing after a
-        // beat so the next possession (or a reset) re-evaluates him as a free mover.
-        if (ob.t > SCREEN_HOLD_MAX * 2) {
+        // The roller READS when the dive is spent (no fixed timer/distance): while his
+        // ball-handler is attacking the rim the dump-off is live, so he keeps diving; once
+        // the handler is no longer attacking AND he's dived past him toward the basket, the
+        // play has moved on — he stops rolling and his normal off-ball decider takes over
+        // (post up / sit in the dunker / relocate) per his own read and attributes.
+        if (!G.driving && dist(p, h) < dist(bh, h)) {
           ob.state = "space";
           ob.t = 0;
         }
@@ -1627,7 +1713,9 @@ function resolveOffBall(s: Snapshot, offBallIntents: OffBallDecision[]): void {
       if (dec.popState) {
         p.target = dec.to;
         p.dbgIntent = "pnr-pop";
-        if (ob.t > SCREEN_HOLD_MAX * 2) {
+        // he spaced out for the attack; once the handler is no longer attacking he reads
+        // the action as over and becomes a normal spot-up shooter (his decider resumes).
+        if (!G.driving && dist(p, h) > dist(bh, h)) {
           ob.state = "space";
           ob.t = 0;
         }
@@ -2151,11 +2239,13 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     })();
 
     const continuationBonus = s.driving ? DRIVE_CONTINUATION_BONUS : 0;
-    // The off-a-set-pick downhill bonus is added AFTER the rim-protection multiplier:
-    // coming off the screen with momentum, the handler attacks INTO the dropping big
-    // rather than being walled off pre-emptively (drop concedes the floater/finish).
+    // Coming off a SET pick, the handler attacks DOWNHILL: his man's been screened, so
+    // the lane congestion (the roller + its defender) is a READ/dump-off, not a wall.
+    // Discount laneBlock's bite so a realistic on-the-defender screen springs a rim
+    // attack instead of reading as walled-off. The flat offScreenBonus adds momentum.
+    const laneBite = offScreenBonus > 0 ? laneBlock * 0.7 * SCREEN_LANE_DISCOUNT : laneBlock * 0.7;
     driveU = (clamp(handleEdge + speedEdge, -0.3, 0.65) + 0.68 + iqBonus + lagBonus + tightBonus + continuationBonus)
-      * (1 - laneBlock * 0.7)
+      * (1 - laneBite)
       + offScreenBonus;
   }
 
@@ -2239,13 +2329,21 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     }
   }
 
-  if (onBallBeaten && dh < LAYUP_ATTACK_DIST && laneWallCount(bh, def, h) < 2) {
+  // Beaten on-ball man at attack range → the handler attacks the rim. How willing he is
+  // to FINISH THROUGH HELP scales with how aggressively he attacks the rim (driveRim):
+  // an aggressive attacker goes up through a body (and through 2 walling defenders); an
+  // average player gates at the old threshold and kicks more. Keying this on the trait
+  // (rather than buffing it globally) keeps leaguewide rim conversion at baseline while
+  // letting a rim-attacking team actually convert drives into rim attempts.
+  const aggro = clamp((effectiveTendencies(bh).driveRim - 50) / 30, 0, 1); // 0 at ≤50, 1 at ≥80
+  const wallTol = aggro >= 0.5 ? 3 : 2; // a determined attacker drives into 2 defenders
+  if (onBallBeaten && dh < LAYUP_ATTACK_DIST && laneWallCount(bh, def, h) < wallTol) {
     const help = rimHelp(bh, def, h);
     if (dh > DRIVE_BASE_DIST_MIN) {
       driveU += LAYUP_DRIVE_BONUS * clamp(1 - help * 0.5, 0.4, 1);
     } else {
-      shootU += LAYUP_FINISH_BONUS * clamp(1 - help * 0.6, 0.3, 1);
-      passU *= clamp(0.4 + help * 0.5, 0.4, 0.85);
+      shootU += LAYUP_FINISH_BONUS * clamp(1 - help * (0.6 - 0.2 * aggro), 0.3 + 0.2 * aggro, 1);
+      passU *= clamp(0.4 + help * 0.5, 0.4, 0.85 - 0.15 * aggro);
     }
   }
 
@@ -2267,6 +2365,24 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     passU *= 0.5;
   }
 
+  // The handler's OWN read on getting a ball screen: he calls for one only when he's
+  // CONTAINED — running a PnR with no open shot, no open driving lane, and no good pass.
+  // Keyed on OPENNESS (lane clear / open shot), NOT drive ability: a great driver whose
+  // man is walling him off still needs the pick, so we don't gate it out by his high
+  // driveU. He WAVES IT OFF (screenWaveOff) only once a clear attack actually opens (open
+  // shot or open lane) — hysteresis, so a called pick persists to set instead of churning
+  // call→reject as the read flickers. Selective: an open handler just takes what's there.
+  const best = Math.max(shootU, driveU, passU, postU);
+  const laneOpen = isLaneClear(bh, def, h);
+  const openShot = shootU >= SCREEN_WAIT_GREAT;
+  const noGoodPass = bestPU < HOLD_PASS_QUALITY;
+  const wantsScreen = tac.action === "pnr" && best !== postU && !openShot && !laneOpen && noGoodPass;
+  // He waves off a called pick ONLY for a genuinely great standstill shot — not for a
+  // transient open lane. (laneOpen flickers tick-to-tick; waving off on it dispersed the
+  // screener constantly so the handler "rejected every screen" instead of using it. Once
+  // he's called for the pick he commits to using it unless a clear shot opens up.)
+  const screenWaveOff = openShot;
+
   return {
     who: bh,
     shootU,
@@ -2284,6 +2400,8 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
     postDef,
     postEdge,
     toward: { x: lerp(bh.x, h.x, 0.72), y: lerp(bh.y, h.y, 0.6) },
+    wantsScreen,
+    screenWaveOff,
   };
 }
 
@@ -2293,4 +2411,3 @@ function ballHolderViewLocal(s: Snapshot): PlayerView | null {
   if (s.ball.holderNum == null) return null;
   return s.off.find((v) => v.num === s.ball.holderNum) ?? null;
 }
-

@@ -14,6 +14,26 @@ A tick-based basketball coaching simulation. A pure TypeScript engine advances t
 - **All randomness routes through `src/core/rng.ts`** — a seeded, portable mulberry32 generator. Use `rng()`/`rnd()`/`chance()`/`randn()` from `src/core/math.ts`; never `Math.random()` in the engine. `newGame(seed)` reproduces a game exactly.
 - This is what makes the test suite a reliable spec and lets the engine be re-implemented in another language from the tests alone.
 
+## Decisions live in the players (the north star)
+
+Push **all** decision-making into the individual players, decided **per-tick** from each
+player's own read of the floor (his utility deciders), plus his attributes / tendencies /
+coaching. Coordination happens through shared reference points (e.g. a screen "call"), not
+central control. Concretely:
+
+- **No central scripts or state-machines deciding behavior** for a player. A player isn't
+  "put into" a committed multi-tick action that runs to a fixed end — he re-evaluates and
+  chooses to continue or change each tick. (e.g. a roller decides when the dive is spent
+  and he should post/relocate; he isn't stopped by a hardcoded timer/distance.)
+- **No hardcoded magic timers / thresholds for behavior.** "How long to hold a screen",
+  "when to stop rolling", "when to give up a cut" — these are the **player's** decision and
+  should be **player-dependent** (derived from his IQ / relevant tendency / the live read),
+  not a global constant the same for everyone. The vast majority of the tuning constants
+  scattered through `src/sim` are debt against this rule; prefer replacing them with a
+  per-player read when you touch them, and don't add new ones.
+- Physical/scoring math (contact, make probability, RNG draws) stays shared; it's the
+  *decisions* (what to do, and when to stop doing it) that belong to the player.
+
 ## Layout
 
 ```

@@ -111,12 +111,14 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
   /* Off-ball action cues. Each PURPOSEFUL action draws a colored arrow toward its
      target plus a small label, so what each player is doing is self-explanatory
      (no dotted-vs-solid guessing). Plain spacing drift is intentionally NOT drawn —
-     only named actions (cut/roll/pop/screen) get a cue. Keyed off p.ob.state. */
+     only named actions (cut/roll/pop/screen/post) get a cue. Keyed off p.ob.state,
+     except post-up which is an off-ball posture tagged on p.dbgIntent. */
   const ACTION_CUE: Record<string, { label: string; color: string }> = {
     cut: { label: "cut", color: "#46d6f4" }, // cyan — basket/back cut
     roll: { label: "roll", color: "#f4a23a" }, // orange — roll to rim
     pop: { label: "pop", color: "#7ddc6b" }, // green — pop to the arc
     screen: { label: "screen", color: "#f4c542" }, // gold — setting the pick
+    post: { label: "post", color: "#c08af4" }, // violet — posting up on the block
   };
   function drawActionCues(): void {
     const holder = G.ball.holder;
@@ -127,7 +129,10 @@ export function createRenderer(canvas: HTMLCanvasElement): () => void {
     cx!.textBaseline = "bottom";
     for (const p of offTeam()) {
       if (p === holder) continue;
-      const cue = ACTION_CUE[p.ob?.state ?? ""];
+      // post-up is a SPACE-state posture (a big established on the block), tagged on
+      // dbgIntent rather than ob.state — surface it as its own cue when no named
+      // ob.state action is active.
+      const cue = ACTION_CUE[p.ob?.state ?? ""] ?? (p.dbgIntent === "post" ? ACTION_CUE.post : undefined);
       if (!cue) continue;
       cx!.strokeStyle = cue.color;
       cx!.fillStyle = cue.color;

@@ -113,11 +113,14 @@ const SEEDS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 describe("driving behavior — rim+close attempts respond to tendencies and matchups", () => {
   /*
-   * FLOOR: a neutral team (driveRim=80) generates at least 25% of its FGA as
-   * rim+close attempts. The observed rate is ~36%; this floor gives plenty of
-   * headroom against noise while confirming drives are a real part of the offense.
-   * Compared against driveRim=5 (suppressed) to show the floor is above the
-   * suppressed baseline.
+   * FLOOR: a high-driveRim team generates a meaningful share of its FGA as rim+close
+   * attempts (observed ~0.19) AND clearly more than a drive-suppressed team. The floor
+   * is intentionally below the observed rate to leave headroom against seed noise. It
+   * was higher when the engine auto-set a ball screen EVERY possession; ball screens are
+   * now SELECTIVE (the handler calls one only when contained — a player decision), so a
+   * high-drive team gets to the rim more on its own raw drives than off automatic picks,
+   * and the absolute rim share settled lower. The relative check below (≥1.8× the
+   * suppressed baseline) is the real guard that drives respond to tendency.
    */
   it("rim+close FGA make up a meaningful share of attempts and clearly exceed a drive-suppressed baseline", async () => {
     let highRimFga = 0, highFga = 0;
@@ -133,8 +136,9 @@ describe("driving behavior — rim+close attempts respond to tendencies and matc
       lowFga += sum(low.home, "fga");
     }
 
-    // floor: at least 20% of shots are rim+close when driveRim is elevated
-    expect(highRimFga / highFga).toBeGreaterThanOrEqual(0.20);
+    // floor: a meaningful share of shots are rim+close when driveRim is elevated
+    // (observed ~0.19; floor kept below that for seed-noise headroom)
+    expect(highRimFga / highFga).toBeGreaterThanOrEqual(0.16);
 
     // the high-drive team generates at least 1.8× the rim+close FGA of the
     // drive-suppressed team; observed ratio is ~2.6×
