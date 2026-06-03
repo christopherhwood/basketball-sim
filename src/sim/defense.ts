@@ -1,4 +1,5 @@
 import { G, offTeam, defTeam, hoop } from "../core/state.js";
+import { maxSpeed } from "./movement.js";
 import { dist, clamp, lerp } from "../core/math.js";
 import { rules } from "../core/rules.js";
 import { effectiveTendencies, tendencyFactor } from "./tendency.js";
@@ -152,6 +153,8 @@ const SAG_MIN_DEPTH = 10; // ft from rim: no sag at the rim, full sag fades in b
 const SAG_DEPTH_RANGE = 12; // ft over which the outside-the-rim sag fades to full
 const SAG_SPEED_PIVOT = 70; // defender speed below which he sags a bit more (can't pressure safely)
 const SAG_SLOW_MAX = 1.5; // ft of extra cushion for a very slow on-ball defender
+const BEAT_EDGE_W = 1 / 25; // per point of the handler's quickness/handle edge → share of a full beat (0..1)
+const BEAT_TRAIL = 4; // ft a fully-beaten on-ball defender ends up trailing — a clear step behind, not goal-side
 
 /* ---------- ON-BALL STANCE: pressure vs contain (per-defender utility) ----------
    The on-ball defender CHOOSES his stance instead of always running the fixed sag
@@ -385,7 +388,22 @@ export function decideDefense(s: Snapshot): DecidedIntent[] {
       const sagScale = onBallSagScale(m, d, s.shotClock, effectiveTendencies(d));
       const sagDist = (SAG_MAX * (1 - perimeterThreat(m)) + slow) * outside * sagScale;
       const cushion = presDist * 0.5 + sagDist;
-      const to: Point = { x: predX - (dx / dd) * cushion, y: predY - (dy / dd) * cushion };
+      // BEATEN OFF THE DRIBBLE: a goal-side stance only holds if the defender can
+      // stay in front. When the handler is driving AND has the quickness/handle edge
+      // to beat THIS defender (quicknessEdge, the live matchup), the defender gets
+      // caught on the hip and trails — he can't sit goal-side. Scale his spot from in
+      // front toward a trailing recover-point by how decisively he's beaten and how
+      // hard the man is attacking the rim, so a real blow-by shows separation (and the
+      // positional help/`onBallBeaten` reads downstream light up on their own). A
+      // defender who wins the matchup, or a handler not driving, just holds the front.
+      let offset = cushion; // >0 = goal-side (in front); <0 = trailing
+      if (G.driving) {
+        const driveToRim = (m.vx * -dx + m.vy * -dy) / dd; // ft/s the man is moving rimward
+        const intensity = clamp(driveToRim / maxSpeed(m), 0, 1);
+        const beat = clamp(quicknessEdge(m, d) * BEAT_EDGE_W, 0, 1) * intensity;
+        offset = cushion - beat * (cushion + BEAT_TRAIL); // beat=1 → trail by BEAT_TRAIL
+      }
+      const to: Point = { x: predX - (dx / dd) * offset, y: predY - (dy / dd) * offset };
       intentFor.set(d, { kind: "contest", manNum: m.num, to });
     } else {
       // off-ball: "on the line, up the line", shifted by the deny-vs-sag STANCE
