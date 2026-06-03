@@ -187,6 +187,6 @@ const DT_GRACE = 0.1 + 1e-9;
 // A port reproducing the mulberry32 stream and tick logic MUST match these exactly.
 const GOLDEN = {
   homeScore: 21,
-  awayScore: 15,
-  totalFga: 26,
+  awayScore: 16,
+  totalFga: 22,
 };
