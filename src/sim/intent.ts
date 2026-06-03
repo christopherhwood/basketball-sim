@@ -30,6 +30,14 @@ export interface BallDecision {
   postEdge: number;
   // drive target point (lerp toward the hoop)
   toward: Point;
+  // the handler WANTS a ball screen this tick — his own read: running a PnR, CONTAINED
+  // (no open shot, no open lane, no good pass), so he calls a big up for a pick. The
+  // orchestrator turns this into a callScreen.
+  wantsScreen: boolean;
+  // a clear attack opened up (open shot or open lane) — wave off a called pick that
+  // hasn't set yet. Separate from !wantsScreen so there's HYSTERESIS: a called pick
+  // persists through the in-between zone instead of churning call→reject every tick.
+  screenWaveOff: boolean;
 }
 
 /* ---------- INTENTS ----------

@@ -4,7 +4,7 @@ import { G, offTeam, defTeam, hoop, players, logEv } from "../core/state.js";
 import { tacFor } from "../tactics/tactics.js";
 import { moveAll, moveTeam, resolveScreenContact, defenderTrail } from "./movement.js";
 import type { ActiveScreen, ScreenScheme } from "./movement.js";
-import { decideOnBall, decideOffBall, resolveOffense, updateScreenCall, isInsidePlayer } from "./offense.js";
+import { decideOnBall, decideOffBall, resolveOffense, updateScreenCall, applyScreenDecision, isInsidePlayer } from "./offense.js";
 import { decideDefense, decideScreenCoverage } from "./defense.js";
 import { effectiveTendencies } from "./tendency.js";
 import { sense } from "./snapshot.js";
@@ -133,12 +133,6 @@ function activeScreen(): ActiveScreen | null {
 // Handler↔defender gap (ft) at which the pick is deemed USED: the screen opened
 // real separation, so the handler came off it and the screener finishes (roll/pop).
 const SCREEN_USED_GAP = 4.5;
-// Seconds a screen can stay SET before the screener finishes the action anyway (the
-// handler came off it, didn't reset out) — the roll man dives to keep the rim read.
-const SCREEN_ENGAGE_HOLD = 0.6;
-// Handler must be inside this distance from the rim (came off the pick, attacking)
-// for the engage-hold to fire; farther out = he reset out, screen expires instead.
-const SCREEN_ENGAGE_MAX_DEPTH = 26;
 
 /* Apply the physical screen: mark the screen SET (the pick arrived at the point of
    attack), mark the handler ENGAGED once he has used it (driving off it / pulled
@@ -156,17 +150,20 @@ function applyScreenContact(): void {
     const trailNow = defenderTrail(G.ball.holder!, scr.onBallDef, hoop());
     const gapNow = Math.hypot(G.ball.holder!.x - scr.onBallDef.x, G.ball.holder!.y - scr.onBallDef.y);
     ob.screenSet = true;
-    // The handler ENGAGED the pick once it has WORKED: he's driving off it, has
-    // pulled ahead of his man toward the rim, OR the pick opened real separation
-    // from his defender. Once engaged, the screener finishes the action (roll/pop).
-    // A pick set for a beat while the handler stays attached to it (hasn't retreated
-    // toward the perimeter) also counts as engaged so the roll man reliably dives —
-    // the PnR's rim threat. If the handler RESETS OUT, this never fires and the
-    // screen expires to a relocate (bug 3). Roll/pop NEVER fires without screenSet.
-    const handlerToHoop = Math.hypot(G.ball.holder!.x - hoop().x, G.ball.holder!.y - hoop().y);
-    const handlerEngaging = handlerToHoop < SCREEN_ENGAGE_MAX_DEPTH;
-    const engaged = G.driving || trailNow > 1.5 || gapNow > SCREEN_USED_GAP;
-    if (engaged || (handlerEngaging && (ob.t ?? 0) > SCREEN_ENGAGE_HOLD)) {
+    // The handler has USED the pick once he's actually come OFF it — he's ROUNDED the
+    // screener (turned the corner: he's now nearer the rim than the screen), or the pick
+    // opened real separation from his man. The screener HOLDS the pick planted until then
+    // (NOT the moment the handler merely starts driving — that rolled him away before the
+    // handler could round him, so there was nothing to drive around). Only after he's
+    // used does the screener finish (roll/pop). If the handler never uses it, the screen
+    // holds until the screener's own patience runs out (screenHoldExpire) and he
+    // relocates — no phantom roll. Roll/pop NEVER fires without screenSet.
+    const hp = hoop();
+    const handlerToRim = Math.hypot(G.ball.holder!.x - hp.x, G.ball.holder!.y - hp.y);
+    const screenToRim = Math.hypot(scr.screener.x - hp.x, scr.screener.y - hp.y);
+    const roundedScreen = handlerToRim < screenToRim; // handler has turned the corner past the pick
+    const engaged = roundedScreen || trailNow > 1.5 || gapNow > SCREEN_USED_GAP;
+    if (engaged) {
       ob.screenUsed = true;
     }
   }
@@ -333,8 +330,9 @@ export function tick(): void {
   const snap = sense();
   const defIntents = decideDefense(snap);
   if (G.ball.state === "held") {
-    updateScreenCall(); // own the PnR call + screener intention before the off-ball deciders read it
+    updateScreenCall(); // maintain a live PnR call + screener intention before the deciders read it
     const ball = decideOnBall(snap);
+    applyScreenDecision(ball); // handler's own call/reject decision, before the off-ball deciders read it
     const offBallIntents = decideOffBall(snap);
     resolveOffense(snap, ball, offBallIntents);
   }
