@@ -1053,6 +1053,33 @@ function isLaneClear(bh: Player, def: Player[], h: Point): boolean {
   return true;
 }
 
+/* How walled is the path from the handler to the rim, 0 (clear) .. 1 (a defender
+   planted dead-center in the lane). The handler's OWN man is excluded — that's the
+   beat-your-man matchup, read separately — so this measures the help/set defense
+   between him and the basket. Returns the most central obstruction in the corridor;
+   distance falls out naturally (a longer path is likelier to have someone in it). */
+function lanePressure(bh: Player, def: Player[], h: Point): number {
+  const dx = h.x - bh.x,
+    dy = h.y - bh.y,
+    len = Math.hypot(dx, dy);
+  if (len < 0.1) return 0;
+  const ux = dx / len,
+    uy = dy / len;
+  let worst = 0;
+  for (const d of def) {
+    if (d.assign === bh) continue; // own man = the matchup read, not a lane wall
+    const tx = d.x - bh.x,
+      ty = d.y - bh.y;
+    const along = tx * ux + ty * uy;
+    if (along < 1 || along > len) continue; // not between the handler and the rim
+    const perp = Math.abs(tx * uy - ty * ux);
+    if (perp >= OPEN_LANE_CORRIDOR_WIDTH) continue; // outside the driving corridor
+    const central = 1 - perp / OPEN_LANE_CORRIDOR_WIDTH; // 1 = dead in the path
+    if (central > worst) worst = central;
+  }
+  return worst;
+}
+
 /* Returns true when a help defender has stepped toward the driving ball-handler
    (i.e., the driver has drawn help, opening a kick-out target). */
 function helpCommittedToDriver(bh: Player, def: Player[], h: Point): boolean {
@@ -2292,6 +2319,21 @@ export function decideOnBall(s: Snapshot): BallDecision | null {
         (onBall.attr.iq - bh.attr.iq) * CUTOFF_IQ_W;
       const contained = clamp(CUTOFF_BASE_P + edge, CUTOFF_P_MIN, CUTOFF_P_MAX);
       driveU *= 1 - contained * guarding; // he drives as often as he can beat the man who's actually on him
+    }
+  }
+
+  // Path to the rim: beyond beating his own man, the handler reads the help/set
+  // defense walling the lane between him and the basket. How much a clogged path
+  // deters him is HIS call — an aggressive slasher attacks a crowded lane, a
+  // reluctant handler waits for it to clear and sets the offense up. His driveRim
+  // aggression sets the weight, so the same walled lane stops one player and not
+  // another. Only a pre-drive read (a committed drive is governed by the cutoff);
+  // a clear lane leaves it untouched and the open-lane bonus above still stands.
+  if (driveU > 0 && !s.driving && dh > OPEN_LANE_MIN_DIST) {
+    const block = lanePressure(bh, def, h);
+    if (block > 0) {
+      const aggression = clamp(tendencies.driveRim / 100, 0, 1);
+      driveU *= 1 - block * (1 - aggression);
     }
   }
 
